@@ -1,6 +1,6 @@
 [project]
 name = "newsautopublisher"
-version = "0.1.0"
+version = "0.2.0"
 description = "Serveur MCP : news de projets, shorts verticaux et publication Discord / X / YouTube"
 requires-python = ">=3.11"
 dependencies = [
@@ -11,6 +11,9 @@ dependencies = [
     "python-dotenv>=1",
     "obsws-python>=1.7",
     "piper-tts>=1.3",
+    "oauthlib>=3.2",
+    "google-auth-oauthlib>=1.2",
+    "websocket-client>=1.7",
 ]
 
 [project.optional-dependencies]

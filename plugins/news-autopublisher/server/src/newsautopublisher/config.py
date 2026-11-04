@@ -81,10 +81,24 @@ class ChannelConfig(_Model):
     username: str | None = None
     avatar_url: str | None = None
     max_upload_mb: float = 10.0
+    crosspost: bool = False  # salon d'annonces : diffuser aux serveurs abonnés (bot requis)
+    bot_token_env: str = "DISCORD_BOT_TOKEN"
     # X / YouTube
     mode: Literal["intent", "api", "manual"] | None = None
-    monthly_budget_usd: float = 0.0
     handle: str | None = None  # @compte (affichage dans la prévisualisation)
+    # X en mode API (OAuth 1.0a : clés de l'app + jeton d'accès de TON compte, portail développeur X)
+    monthly_budget_usd: float = 0.0  # 0 = aucune publication payante autorisée
+    api_key_env: str = "X_API_KEY"
+    api_secret_env: str = "X_API_SECRET"
+    access_token_env: str = "X_ACCESS_TOKEN"
+    access_secret_env: str = "X_ACCESS_TOKEN_SECRET"
+    cost_post_usd: float = 0.015  # tarifs indicatifs du paiement à l'usage (à ajuster si X les change)
+    cost_post_url_usd: float = 0.20
+    cost_media_usd: float = 0.0  # par média envoyé, si X facture l'upload
+    # YouTube en mode API
+    audited: bool = False  # projet Google Cloud ayant passé l'audit de l'API YouTube
+    client_secret_file: str | None = None  # défaut : credentials/youtube_client_secret.json
+    category_id: str = "20"  # 20 = Jeux vidéo, 28 = Science et technologie
 
     @property
     def platform(self) -> str:

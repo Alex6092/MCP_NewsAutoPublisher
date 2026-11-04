@@ -81,6 +81,7 @@ channels:
     webhook_env: DISCORD_WEBHOOK_EXODE
     # mention: "<@&123456789012345678>"   # rôle à notifier ; absent = aucune notification
     max_upload_mb: 10
+    # crosspost: true          # salon d'annonces : diffuse aussi aux serveurs abonnés (bot DISCORD_BOT_TOKEN)
   discord.plugins_en:
     type: discord_webhook
     label: "Discord plugins #announcements"
@@ -94,10 +95,20 @@ channels:
     label: "X"
     mode: intent              # intent = éditeur X prérempli, tu cliques « Poster » (gratuit)
     # handle: "@ton_compte"
+    # --- Mode API (payant à l'usage, publication 100 % automatique avec la vidéo) ---
+    # mode: api
+    # monthly_budget_usd: 5   # plafond : au-delà, la publication est refusée (0 = interdit)
+    # cost_post_usd: 0.015    # tarifs indicatifs ; ajuste-les si X les modifie
+    # cost_post_url_usd: 0.20
   youtube.main:
     type: youtube
     label: "YouTube Shorts"
     mode: manual              # manual = MP4 + métadonnées prêts, tu glisses le fichier dans YouTube Studio
+    # --- Mode API (upload automatique, mise en ligne programmable) ---
+    # mode: api
+    # audited: false          # passe à true UNIQUEMENT après l'audit Google (sinon vidéos bloquées en privé)
+    # category_id: "20"       # 20 = Jeux vidéo, 28 = Science et technologie
+    # client_secret_file: C:/Users/toi/.newsautopublisher/credentials/youtube_client_secret.json
 
 voice:
   default_engine: piper

@@ -261,6 +261,20 @@ class Renderer:
             "warnings": self.warnings,
         }
 
+    def x_variant(self, src: Path) -> Path:
+        """Copie 720×1280 pour X (portrait limité à 1200×1900, 140 s maximum)."""
+        info = probe(src, self.ffprobe)
+        if (info["duration"] or 0) > 140:
+            raise FFmpegError(f"Vidéo de {info['duration']:.0f} s : X accepte 140 s maximum.")
+        out = src.with_name(src.stem + "_x.mp4")
+        if out.exists() and out.stat().st_mtime >= src.stat().st_mtime:
+            return out
+        run([self.ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-i", str(src),
+             "-vf", "scale=720:1280:flags=lanczos", "-r", "30", "-c:v", "libx264", "-preset", "medium",
+             "-crf", "21", "-maxrate", "5000k", "-bufsize", "10000k", "-pix_fmt", "yuv420p",
+             "-c:a", "aac", "-b:a", "128k", "-ar", "48000", "-movflags", "+faststart", str(out)])
+        return out
+
     def discord_variant(self, src: Path, max_mb: float) -> Path:
         """Copie ≤ max_mb pour l'upload Discord (720×1280, débit calculé)."""
         size_mb = src.stat().st_size / 1024 / 1024

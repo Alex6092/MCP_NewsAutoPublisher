@@ -29,6 +29,12 @@
 - Mode intent :
   - l'utilisateur voit l'éditeur prérempli et y glisse lui-même le short ou une image ;
   - le lien affiche une carte d'aperçu si la page cible a une image Open Graph.
+- Mode API (payant) :
+  - le short est envoyé automatiquement en 720×1280, 140 s maximum ;
+  - pas de mélange vidéo + images (la vidéo l'emporte), 4 images maximum ;
+  - un post **avec lien coûte environ 13 fois plus cher** qu'un post sans lien (0,20 $ contre 0,015 $).
+    Si le budget est serré, propose une version sans URL (« lien sur notre Discord ») et signale-le
+    dans le rapport.
 
 ## YouTube Shorts
 
@@ -46,6 +52,10 @@
   - les liens (Discord, Fab, site) ;
   - 3 à 5 hashtags.
 - Tags : 5 à 10 mots clés (nom du projet, moteur, genre), 500 caractères au total.
+- `publish_at` (mode API uniquement) : programme la mise en ligne (ISO 8601 UTC, ex.
+  `2026-11-20T17:00:00Z`). À n'utiliser que si l'utilisateur donne une date.
+- `contains_synthetic_media` : laisser vide. Ne mettre `true` que pour un contenu réaliste trompeur
+  (voix clonée d'une vraie personne, scène réelle truquée) ; une voix de synthèse qui narre n'en relève pas.
 - Zone de sécurité : le bas de l'écran (environ 20 %) et la droite sont masqués par l'interface.
   Le gabarit place déjà les textes au bon endroit.
 

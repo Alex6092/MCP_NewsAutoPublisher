@@ -34,12 +34,35 @@ Demande : $ARGUMENTS
 4. `publish(draft_id)`, éventuellement limité à certains `channels` si l'utilisateur le demande.
 5. Lis chaque résultat :
    - `published` : donne le lien.
+     - X en mode API : rappelle le coût estimé.
+     - Discord avec crosspost : précise que l'annonce a été diffusée aux serveurs abonnés.
+     - YouTube avec `publish_at` : rappelle la date de mise en ligne programmée.
    - `pending_manual` sur X : l'éditeur X s'est ouvert avec le texte. L'utilisateur glisse le
      short ou l'image affichés dans l'Explorateur, clique « Poster », puis te donne l'URL du post.
    - `pending_manual` sur YouTube : YouTube Studio et le dossier du MP4 sont ouverts. Le titre est
      dans le presse-papiers, le reste est dans `youtube.txt`. L'utilisateur publie, puis te donne l'URL.
-   - `failed` : explique la cause (webhook manquant dans `.env`, fichier trop lourd…) et la solution.
+   - `failed` : explique la cause et la solution. Cas fréquents :
+     - webhook ou clés manquants dans `.env` ;
+     - fichier trop lourd ;
+     - budget X atteint : proposer le mode intent pour ce post, ou laisser l'utilisateur relever
+       `monthly_budget_usd` lui-même ;
+     - compte YouTube non connecté : `connect_account` ;
+     - projet Google non audité.
 6. Pour chaque URL reçue : `mark_published(draft_id, channel, url)`.
 7. Récapitule en une ou deux lignes ce qui est en ligne et ce qui reste à faire.
 
 Ne republie jamais un canal déjà `published`. L'outil l'empêche aussi.
+
+## Comptes en mode API (une seule fois par canal)
+
+`connect_account(channel)`, uniquement à la demande de l'utilisateur ou quand une publication
+échoue faute de connexion :
+
+- **YouTube** : ouvre le consentement Google dans le navigateur, puis affiche la chaîne connectée.
+  Vérifie avec l'utilisateur que c'est la bonne chaîne (comptes de marque).
+- **X** : vérifie les 4 clés et affiche le compte et le budget du mois.
+- **Discord** : connecte une première fois le bot (nécessaire au crosspost) et vérifie que le
+  salon est bien un salon d'annonces.
+
+Ne modifie jamais toi-même `monthly_budget_usd` ni `audited` dans config.yaml : ce sont des
+décisions de l'utilisateur.

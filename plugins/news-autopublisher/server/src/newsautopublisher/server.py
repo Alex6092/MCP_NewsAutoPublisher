@@ -28,11 +28,13 @@ Déroulé : detect_project / list_projects -> collect_changes -> create_draft (u
 -> render_short -> render_preview -> l'utilisateur relit -> approve_draft -> publish -> mark_published.
 RÈGLE ABSOLUE : n'appelle approve_draft et publish qu'après un accord explicite de l'utilisateur
 sur la prévisualisation (« ok », « publie »…). Ne publie jamais de ta propre initiative.
-X est en mode intent (l'utilisateur clique « Poster ») et YouTube en mode manuel (upload dans Studio) :
-après publish, demande-lui les URL et enregistre-les avec mark_published.
+Selon la config des canaux : X en mode intent (l'utilisateur clique « Poster ») ou api (payant, plafonné
+par monthly_budget_usd) ; YouTube en mode manuel (upload dans Studio) ou api (après audit Google).
+Pour les canaux en attente manuelle, demande les URL à l'utilisateur et enregistre-les avec mark_published.
+Un canal en mode api se connecte une fois avec connect_account.
 """
 
-mcp = MCPServer("newsautopublisher", instructions=INSTRUCTIONS, version="0.1.0")
+mcp = MCPServer("newsautopublisher", instructions=INSTRUCTIONS, version="0.2.0")
 _app: App | None = None
 
 READ = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
@@ -286,6 +288,15 @@ async def publish(
 ) -> dict[str, Any]:
     """Publie un brouillon approuvé : Discord (webhook), X (éditeur prérempli), YouTube (upload manuel guidé)."""
     return await _run(app().publish, draft_id, channels, dry_run)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True))
+async def connect_account(
+    channel: str = Field(..., description="Id du canal (ex. youtube.main, x.main, discord.exode)."),
+) -> dict[str, Any]:
+    """Connecte / vérifie un canal en mode API : YouTube (consentement OAuth dans le navigateur, une fois),
+    X (vérifie les clés, affiche le compte et le budget), Discord (connexion initiale du bot pour le crosspost)."""
+    return await _run(app().connect_account, channel)
 
 
 @mcp.tool(annotations=LOCAL)

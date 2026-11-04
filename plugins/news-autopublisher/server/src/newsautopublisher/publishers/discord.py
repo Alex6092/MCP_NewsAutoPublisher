@@ -12,6 +12,7 @@ import httpx
 
 from ..config import ChannelConfig
 from ..models import DiscordPost, PublishResult
+from . import discord_bot
 
 
 def _color_int(color: str | None) -> int | None:
@@ -71,14 +72,18 @@ def publish_discord(
     footer: str | None = None,
     dry_run: bool = False,
     client: httpx.Client | None = None,
+    bot_token: str | None = None,
 ) -> PublishResult:
+    """Publie via le webhook ; si bot_token est fourni, crosspost vers les serveurs abonnés."""
     payload = build_payload(post, channel, files, default_color, footer)
     if dry_run:
+        extra = " + crosspost" if bot_token else ""
         return PublishResult(
             channel=channel_id,
             platform="discord",
             status="dry_run",
-            message=f"Simulation : {len(files)} fichier(s), payload {json.dumps(payload, ensure_ascii=False)[:400]}",
+            message=f"Simulation{extra} : {len(files)} fichier(s), payload "
+                    f"{json.dumps(payload, ensure_ascii=False)[:400]}",
         )
 
     own = client is None
@@ -124,8 +129,12 @@ def publish_discord(
                 url = f"https://discord.com/channels/{info['guild_id']}/{msg['channel_id']}/{msg['id']}"
         except Exception:
             pass
+        message = "Publié sur Discord."
+        if bot_token:
+            problem = discord_bot.crosspost(bot_token, str(msg["channel_id"]), str(msg["id"]), client)
+            message += " Diffusé aux serveurs abonnés." if problem is None else f" Attention : {problem}"
         return PublishResult(channel=channel_id, platform="discord", status="published",
-                             url=url, external_id=str(msg.get("id")), message="Publié sur Discord.")
+                             url=url, external_id=str(msg.get("id")), message=message)
     except httpx.HTTPError as exc:
         return PublishResult(channel=channel_id, platform="discord", status="failed",
                              message=f"Erreur réseau Discord : {exc.__class__.__name__}")

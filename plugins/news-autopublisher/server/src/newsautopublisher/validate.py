@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import unicodedata
+from datetime import datetime, timezone
 from pathlib import Path
 
 from .config import AppConfig
@@ -184,9 +185,20 @@ def validate_draft(draft: Draft, cfg: AppConfig) -> list[Issue]:
         for m in x.media:
             issues += _file_issues("x", "media", m)
         x_channels = [c for c in draft.channels if c in cfg.channels and cfg.channels[c].platform == "x"]
-        if x.url and any(cfg.channels[c].effective_mode == "api" for c in x_channels):
-            issues.append(Issue(level="warning", platform="x", field="url",
-                                message="Mode API : un post avec lien coûte environ 0,20 $ (contre 0,015 $)."))
+        api_channels = [cfg.channels[c] for c in x_channels if cfg.channels[c].effective_mode == "api"]
+        if api_channels:
+            ch = api_channels[0]
+            has_url = bool(x.url) or bool(URL_RE.search(x.text))
+            cost = ch.cost_post_url_usd if has_url else ch.cost_post_usd
+            issues.append(Issue(level="warning", platform="x", field="cost",
+                                message=f"Mode API : coût estimé {cost:.3f} $ ({'avec' if has_url else 'sans'} lien), "
+                                        f"budget mensuel {ch.monthly_budget_usd:.2f} $."))
+            if ch.monthly_budget_usd <= 0:
+                issues.append(Issue(level="error", platform="x", field="budget",
+                                    message="Mode API sans budget : définis monthly_budget_usd sur le canal X."))
+            if x.attach_short and draft.short.duration and draft.short.duration > 140:
+                issues.append(Issue(level="error", platform="x", field="media",
+                                    message=f"Short de {draft.short.duration:.0f} s : X accepte 140 s maximum."))
 
     if posts.youtube:
         y = posts.youtube
@@ -209,6 +221,22 @@ def validate_draft(draft: Draft, cfg: AppConfig) -> list[Issue]:
         if "#shorts" not in (y.title + " " + y.description).lower():
             issues.append(Issue(level="warning", platform="youtube", field="description",
                                 message="Ajoute #Shorts dans le titre ou la description."))
+        yt_channels = [cfg.channels[c] for c in draft.channels
+                       if c in cfg.channels and cfg.channels[c].platform == "youtube"]
+        yt_modes = {c.effective_mode for c in yt_channels}
+        if any(c.effective_mode == "api" and not c.audited for c in yt_channels) and (
+            y.privacy != "private" or y.publish_at
+        ):
+            issues.append(Issue(level="error", platform="youtube", field="privacy",
+                                message="Canal YouTube en mode API non audité : la vidéo serait verrouillée en privé. "
+                                        "Utilise mode: manual, ou privacy: private pour un test."))
+        if y.publish_at:
+            if not _iso_future(y.publish_at):
+                issues.append(Issue(level="error", platform="youtube", field="publish_at",
+                                    message="Date invalide ou passée (format ISO 8601, ex. 2026-11-20T17:00:00Z)."))
+            if "manual" in yt_modes:
+                issues.append(Issue(level="warning", platform="youtube", field="publish_at",
+                                    message="Mode manuel : programme la date toi-même dans YouTube Studio."))
         if "youtube" in platforms:
             if not draft.short.path:
                 issues.append(Issue(level="error", platform="youtube", field="video",
@@ -220,6 +248,16 @@ def validate_draft(draft: Draft, cfg: AppConfig) -> list[Issue]:
                                         message=f"Short de {draft.short.duration:.0f} s (max {SHORT_MAX_SECONDS} s)."))
 
     return issues
+
+
+def _iso_future(value: str) -> bool:
+    try:
+        dt = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    if dt.tzinfo is None:
+        return False
+    return dt > datetime.now(timezone.utc)
 
 
 def has_errors(issues: list[Issue]) -> bool:

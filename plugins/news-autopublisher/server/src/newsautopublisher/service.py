@@ -28,6 +28,7 @@ from .models import (
 )
 from .paths import Paths
 from .preview import write_preview
+from .publishers import discord_bot, x_api, youtube_api
 from .publishers.discord import publish_discord
 from .publishers.x_intent import publish_x_intent
 from .publishers.youtube_manual import publish_youtube_manual
@@ -103,13 +104,26 @@ class App:
             }
             for k, p in cfg.projects.items()
         }
+        def present(env: str | None) -> str:
+            return "présent" if get_secret(env) else f"manquant ({env} dans .env)"
+
         chans = {}
         for k, c in cfg.channels.items():
-            info = {"type": c.type, "mode": c.effective_mode}
+            info: dict[str, Any] = {"type": c.type, "mode": c.effective_mode}
             if c.type == "discord_webhook":
-                info["secret"] = "présent" if get_secret(c.webhook_env) else f"manquant ({c.webhook_env} dans .env)"
-            if c.type in ("x", "youtube") and c.effective_mode == "api":
-                info["warning"] = "mode API pas encore disponible (phase 3) : utilise intent / manual"
+                info["webhook"] = present(c.webhook_env)
+                if c.crosspost:
+                    info["bot"] = present(c.bot_token_env)
+            elif c.type == "x" and c.effective_mode == "api":
+                missing = [e for e in (c.api_key_env, c.api_secret_env, c.access_token_env, c.access_secret_env)
+                           if not get_secret(e)]
+                info["keys"] = "présentes" if not missing else f"manquantes : {', '.join(missing)}"
+                info["budget"] = f"{self.store.spend_this_month(k):.3f} $ dépensés sur {c.monthly_budget_usd:.2f} $ ce mois-ci"
+            elif c.type == "youtube" and c.effective_mode == "api":
+                secret, token = self._yt_files(k, c)
+                info["client_secret"] = "présent" if secret.exists() else f"manquant ({secret})"
+                info["compte"] = "connecté" if token.exists() else "non connecté (connect_account)"
+                info["audited"] = c.audited
             chans[k] = info
         out["channels"] = chans
         voices_dir = self.paths.models / "piper"
@@ -573,6 +587,12 @@ class App:
             if not url and not dry:
                 return PublishResult(channel=ch_id, platform="discord", status="failed",
                                      message=f"Webhook absent : renseigne {ch.webhook_env} dans .env.")
+            bot = None
+            if ch.crosspost:
+                bot = get_secret(ch.bot_token_env)
+                if not bot and not dry:
+                    return PublishResult(channel=ch_id, platform="discord", status="failed",
+                                         message=f"crosspost activé mais {ch.bot_token_env} absent du .env.")
             files: list[Path] = []
             if post.image:
                 files.append(Path(post.image))
@@ -580,24 +600,117 @@ class App:
             if post.attach_short and d.short.discord_path:
                 files.append(Path(d.short.discord_path))
             return publish_discord(post, ch_id, ch, url or "https://discord.invalid/webhook", files,
-                                   p.brand.color, footer=p.name, dry_run=dry)
+                                   p.brand.color, footer=p.name, dry_run=dry, bot_token=bot)
+
         if ch.platform == "x":
-            if mode != "intent":
-                return PublishResult(channel=ch_id, platform="x", status="failed",
-                                     message="Mode API X pas encore disponible : utilise mode: intent.")
             media = [Path(m) for m in post.media]
+            if mode == "intent":
+                if post.attach_short and d.short.path:
+                    media.append(Path(d.short.path))
+                return publish_x_intent(post, ch_id, media, dry_run=dry)
+            if mode != "api":
+                return PublishResult(channel=ch_id, platform="x", status="failed", message=f"Mode X inconnu : {mode}")
             if post.attach_short and d.short.path:
-                media.append(Path(d.short.path))
-            return publish_x_intent(post, ch_id, media, dry_run=dry)
+                media = [self._renderer(p).x_variant(Path(d.short.path))]  # la vidéo remplace les images
+            media = media[:1] if any(m.suffix.lower() in (".mp4", ".mov") for m in media) else media[:4]
+            cost = x_api.estimate_cost(post, len(media), ch.cost_post_usd, ch.cost_post_url_usd, ch.cost_media_usd)
+            spent = self.store.spend_this_month(ch_id)
+            if spent + cost > ch.monthly_budget_usd + 1e-9:
+                return PublishResult(
+                    channel=ch_id, platform="x", status="failed",
+                    message=f"Budget X dépassé : {spent:.3f} $ déjà dépensés + {cost:.3f} $ estimés > "
+                            f"{ch.monthly_budget_usd:.2f} $ (monthly_budget_usd). Utilise mode intent ou augmente le budget.")
+            creds = self._x_creds(ch)
+            if not creds and not dry:
+                return PublishResult(channel=ch_id, platform="x", status="failed",
+                                     message="Clés X manquantes dans .env (X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN, "
+                                             "X_ACCESS_TOKEN_SECRET).")
+            return x_api.publish_x_api(post, ch_id, media, creds or x_api.XCredentials("", "", "", ""), cost,
+                                       ch.handle, dry_run=dry)
+
         if ch.platform == "youtube":
-            if mode != "manual":
-                return PublishResult(channel=ch_id, platform="youtube", status="failed",
-                                     message="Mode API YouTube pas encore disponible (audit requis) : mode: manual.")
             if not d.short.path:
+                return PublishResult(channel=ch_id, platform="youtube", status="failed", message="Aucun short rendu.")
+            if mode == "manual":
+                return publish_youtube_manual(post, ch_id, Path(d.short.path), folder, dry_run=dry)
+            if mode != "api":
                 return PublishResult(channel=ch_id, platform="youtube", status="failed",
-                                     message="Aucun short rendu.")
-            return publish_youtube_manual(post, ch_id, Path(d.short.path), folder, dry_run=dry)
+                                     message=f"Mode YouTube inconnu : {mode}")
+            _, token = self._yt_files(ch_id, ch)
+            if not token.exists() and not dry:
+                return PublishResult(channel=ch_id, platform="youtube", status="failed",
+                                     message="Compte YouTube non connecté : appelle connect_account sur ce canal.")
+            return youtube_api.publish_youtube_api(post, ch_id, Path(d.short.path), token, d.language,
+                                                   ch.category_id, ch.audited, dry_run=dry)
         return PublishResult(channel=ch_id, platform=ch.platform, status="failed", message="Plateforme inconnue.")
+
+    # ------------------------------------------------------------------ comptes (phase 3)
+    def _renderer(self, p: ProjectConfig) -> Renderer:
+        ff, fp = self._ffmpeg()
+        v = self.cfg.video
+        return Renderer(ff, fp, RenderSettings(v.width, v.height, v.fps, v.crf, v.preset, v.max_seconds), Brand())
+
+    def _x_creds(self, ch) -> x_api.XCredentials | None:
+        values = [get_secret(e) for e in (ch.api_key_env, ch.api_secret_env, ch.access_token_env, ch.access_secret_env)]
+        return x_api.XCredentials(*values) if all(values) else None
+
+    def _yt_files(self, ch_id: str, ch) -> tuple[Path, Path]:
+        secret = Path(ch.client_secret_file).expanduser() if ch.client_secret_file else \
+            self.paths.credentials / "youtube_client_secret.json"
+        safe = "".join(c if c.isalnum() else "_" for c in ch_id)
+        return secret, self.paths.credentials / f"youtube_token_{safe}.json"
+
+    def connect_account(self, channel: str) -> dict[str, Any]:
+        """Vérifie / établit la connexion d'un canal en mode API (YouTube : consentement OAuth)."""
+        ch = self.cfg.channel(channel)
+        if ch.type == "youtube":
+            secret, token = self._yt_files(channel, ch)
+            try:
+                info = youtube_api.connect(secret, token, open_browser=desktop.enabled())
+            except youtube_api.YouTubeApiError as exc:
+                raise UserError(str(exc)) from exc
+            info["audited"] = ch.audited
+            if not ch.audited:
+                info["attention"] = ("Projet non audité : les uploads API resteront privés. Demande l'audit "
+                                     "(formulaire « YouTube API Services - Audit and Quota Extension ») avant de "
+                                     "passer audited: true.")
+            return info
+        if ch.type == "x":
+            creds = self._x_creds(ch)
+            if not creds:
+                raise UserError("Renseigne X_API_KEY, X_API_SECRET, X_ACCESS_TOKEN et X_ACCESS_TOKEN_SECRET dans .env.")
+            client = x_api.XClient(creds)
+            try:
+                me = client.me()
+            except x_api.XApiError as exc:
+                raise UserError(str(exc)) from exc
+            finally:
+                client.close()
+            return {"username": me.get("username"), "name": me.get("name"),
+                    "budget_mensuel_usd": ch.monthly_budget_usd,
+                    "depense_ce_mois_usd": self.store.spend_this_month(channel)}
+        if ch.type == "discord_webhook":
+            token = get_secret(ch.bot_token_env)
+            if not token:
+                raise UserError(f"Renseigne {ch.bot_token_env} dans .env (bot nécessaire seulement pour le crosspost).")
+            try:
+                user = discord_bot.identify_once(token)
+            except discord_bot.DiscordBotError as exc:
+                raise UserError(str(exc)) from exc
+            out: dict[str, Any] = {"bot": user.get("username"), "gateway": "connexion initiale effectuée"}
+            hook = get_secret(ch.webhook_env)
+            if hook:
+                import httpx
+
+                try:
+                    chan_id = httpx.get(hook, timeout=20).json().get("channel_id")
+                    info = discord_bot.channel_info(token, chan_id)
+                    out["salon"] = info.get("name")
+                    out["salon_annonces"] = info.get("type") == discord_bot.ANNOUNCEMENT_CHANNEL
+                except (discord_bot.DiscordBotError, httpx.HTTPError) as exc:
+                    out["salon"] = f"vérification impossible : {exc}"
+            return out
+        raise UserError(f"Type de canal inconnu : {ch.type}")
 
     def mark_published(self, draft_id: str, channel: str, url: str) -> dict[str, Any]:
         d = self._get(draft_id)

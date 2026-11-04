@@ -45,6 +45,12 @@ class YouTubePost(_Model):
     tags: list[str] = Field(default_factory=list)
     privacy: Literal["public", "unlisted", "private"] = "public"
     made_for_kids: bool = False
+    publish_at: str | None = Field(
+        None, description="Mise en ligne programmée (ISO 8601, ex. 2026-11-20T17:00:00Z) ; mode API uniquement."
+    )
+    contains_synthetic_media: bool | None = Field(
+        None, description="Déclaration YouTube de contenu réaliste modifié ou synthétique (ex. voix clonée)."
+    )
 
 
 class DraftPosts(_Model):

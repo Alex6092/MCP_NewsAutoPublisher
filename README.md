@@ -22,24 +22,29 @@ Session Claude Code (dépôt Exode, plugin UE…)
           ▼
      tu relis la prévisualisation ─► « publie »
           ▼
-     skill publish ─► Discord (webhook) · X (éditeur prérempli) · YouTube (upload guidé)
+     skill publish ─► Discord (webhook, crosspost) · X (éditeur prérempli ou API) · YouTube (upload guidé ou API)
 ```
 
 ## Ce que fait chaque plateforme
 
+Chaque canal choisit son mode dans `config.yaml`.
+
 | Plateforme | Mode | Coût | Ce qui se passe |
 |---|---|---|---|
 | Discord | webhook | gratuit | Publication automatique : embed + short joint (version ≤ 10 Mo générée automatiquement). |
-| X | `intent` | gratuit | L'éditeur X s'ouvre prérempli dans ton navigateur. Tu glisses le short, tu cliques « Poster », puis tu donnes l'URL à Claude. |
-| YouTube | `manual` | gratuit | YouTube Studio s'ouvre, le dossier du MP4 aussi. Le titre est dans le presse-papiers, le reste dans `youtube.txt`. |
+| Discord | webhook + `crosspost` | gratuit | Comme ci-dessus, puis un bot diffuse l'annonce aux serveurs abonnés au salon d'annonces. |
+| X | `intent` (défaut) | gratuit | L'éditeur X s'ouvre prérempli dans ton navigateur. Tu glisses le short, tu cliques « Poster », puis tu donnes l'URL à Claude. |
+| X | `api` | environ 0,015 $ par post, environ 0,20 $ avec un lien | Publication automatique avec la vidéo (720×1280). Plafond `monthly_budget_usd` : au-delà, la publication est refusée. |
+| YouTube | `manual` (défaut) | gratuit | YouTube Studio s'ouvre, le dossier du MP4 aussi. Le titre est dans le presse-papiers, le reste dans `youtube.txt`. |
+| YouTube | `api` | gratuit (quota Google) | Upload automatique, mise en ligne programmable (`publish_at`). **Projet Google audité obligatoire.** |
 
-Pourquoi X et YouTube ne sont pas 100 % automatiques :
+Pourquoi X et YouTube ne sont pas en API par défaut :
 
-- **X** : l'API est payante depuis février 2026 (environ 0,015 $ par post, environ 0,20 $ avec un
-  lien). Automatiser la page web est interdit par les conditions d'X, avec un risque de suspension
-  du compte. Le mode API, avec un plafond de budget, est prévu en option (phase 3).
-- **YouTube** : sans audit de conformité de Google, les vidéos envoyées par l'API restent bloquées
-  en privé. Le mode API arrivera quand l'audit sera obtenu (phase 3).
+- **X** : l'API est payante depuis février 2026. Automatiser la page web est interdit par les
+  conditions d'X, avec un risque de suspension du compte : c'est exclu.
+- **YouTube** : sans audit de conformité de Google, toute vidéo envoyée par l'API reste
+  **verrouillée en privé, sans recours**. Le plugin refuse donc un upload public tant que le canal
+  n'a pas `audited: true`. Un upload de test en `privacy: private` reste possible.
 
 ## Installation (Windows)
 
@@ -99,6 +104,46 @@ secrets. Les valeurs des secrets ne sont jamais affichées.
 
 Pour placer les données ailleurs, définis la variable d'environnement `NAP_DATA_DIR`.
 
+### 4. Facultatif : modes API
+
+Chaque mode se configure une fois. Termine en demandant à Claude **« connecte le canal … »**
+(outil `connect_account`), qui vérifie que tout fonctionne.
+
+**X en mode API**
+
+1. Crée un compte développeur sur le portail X, avec des crédits en paiement à l'usage.
+2. Crée une app avec les permissions **Read and write**.
+3. Dans *Keys and tokens*, génère l'*API Key and Secret* et l'*Access Token and Secret*. Si tu
+   changes les permissions après coup, régénère l'Access Token.
+4. Copie les 4 valeurs dans `.env` : `X_API_KEY`, `X_API_SECRET`, `X_ACCESS_TOKEN`, `X_ACCESS_TOKEN_SECRET`.
+5. Sur le canal X de `config.yaml`, mets `mode: api` et un plafond `monthly_budget_usd: 5`.
+   - Le suivi des dépenses est une **estimation** locale (tarifs `cost_post_usd` et `cost_post_url_usd`,
+     modifiables).
+   - Vérifie la consommation réelle dans le portail X.
+
+**YouTube en mode API**
+
+1. Dans Google Cloud Console :
+   - crée un projet et active **YouTube Data API v3** ;
+   - configure l'écran de consentement OAuth et ajoute-toi comme utilisateur de test ;
+   - crée un *ID client OAuth* de type **Application de bureau** et télécharge le JSON.
+2. Enregistre ce JSON sous `%USERPROFILE%\.newsautopublisher\credentials\youtube_client_secret.json`.
+3. Sur le canal YouTube, mets `mode: api`, puis demande « connecte le canal youtube.main ».
+   - Le navigateur s'ouvre pour l'autorisation.
+   - Avec plusieurs chaînes (compte de marque), choisis la bonne : Claude affiche celle qui est connectée.
+4. **Demande l'audit** via le formulaire *YouTube API Services – Audit and Quota Extension*. Une fois
+   l'audit accepté, mets `audited: true`. Avant ça, reste en `mode: manual` pour les vidéos publiques.
+
+**Discord : crosspost des annonces**
+
+1. Dans le portail développeur Discord, crée une application, puis un bot. Copie son jeton dans
+   `DISCORD_BOT_TOKEN`.
+2. Invite le bot sur ton serveur (OAuth2 > URL Generator, scope `bot`) avec les permissions
+   *Voir les salons*, *Envoyer des messages* et *Gérer les messages*.
+3. Mets `crosspost: true` sur le canal Discord. Ce doit être un **salon d'annonces**.
+4. Demande « connecte le canal discord.exode ». Le bot se connecte une première fois, comme Discord
+   l'exige, et Claude vérifie le type de salon.
+
 ## Utilisation
 
 - **Préparer** : « publie une news sur ce qu'on vient de faire », ou `/news-autopublisher:news exode quêtes`.
@@ -144,7 +189,7 @@ Le dossier contient :
   - `video/` : montage ffmpeg et sous-titres ASS.
   - `voice/` : Piper, ElevenLabs, voix enregistrée.
   - `capture/` : OBS, ffmpeg gdigrab/ddagrab.
-  - `publishers/` : Discord, X intent, YouTube manuel.
+  - `publishers/` : Discord (webhook, crosspost par bot), X (intent, API), YouTube (manuel, API).
 - `plugins/news-autopublisher/skills/` : skills `news` (préparation, exécutée dans le sous-agent)
   et `publish` (validation et publication).
 - `plugins/news-autopublisher/agents/news-producer.md` : le sous-agent, qui n'a pas accès aux
@@ -159,8 +204,9 @@ Variables utiles :
 ## Feuille de route
 
 1. ✅ MVP : brouillons, validation (limites, fuites de secrets), prévisualisation, Discord, X intent.
-2. ✅ Shorts : captures OBS / fenêtre, Piper, ta voix, montage, YouTube manuel.
-3. ⏳ Options : X API avec plafond de budget, YouTube API (après audit), bot Discord pour le crosspost.
+2. ✅ Shorts : captures OBS / fenêtre, Piper, ElevenLabs, ta voix, montage, YouTube manuel.
+3. ✅ Modes API : X API avec plafond de budget, YouTube API (après audit) avec mise en ligne
+   programmée, crosspost Discord par bot.
 4. ⏳ Captures pilotées par les moteurs :
    - Unreal : Movie Render Queue en ligne de commande, `HighResShot` ;
    - Unity : mode `-autocapture` du build ou Unity Recorder.
