@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime
@@ -14,7 +15,16 @@ from . import desktop
 from .capture import obs as obs_mod
 from .capture import screen
 from .capture.windows import CaptureError, is_windows, list_windows
-from .config import AppConfig, ConfigCache, ConfigError, ProjectConfig, get_secret, init_data_dir
+from .config import (
+    AppConfig,
+    ConfigCache,
+    ConfigError,
+    ProjectConfig,
+    UnityConfig,
+    UnrealConfig,
+    get_secret,
+    init_data_dir,
+)
 from .ffmpeg import FFmpegError, find_ffmpeg, find_ffprobe, probe
 from .models import (
     Draft,
@@ -36,6 +46,10 @@ from .sources.changelog import read_changelog
 from .sources.git import GitError, collect_changes, head_commit
 from .store import Store
 from .validate import has_errors, validate_draft
+from .engines import unity as unity_engine
+from .engines import unreal as unreal_engine
+from .engines.jobs import EngineJob, JobManager
+from .ffmpeg import run as run_ffmpeg
 from .video.render import Brand, Renderer, RenderSettings
 from .video.storyboard import Storyboard
 from .voice import elevenlabs, piper_tts, recorded
@@ -63,6 +77,7 @@ class App:
         self.store = Store(self.paths.db)
         self.config_cache = ConfigCache(self.paths)
         self.recordings: dict[str, screen.Recording] = {}
+        self.jobs = JobManager()
 
     # ------------------------------------------------------------------ configuration
     @property
@@ -415,6 +430,237 @@ class App:
     def list_media(self, project: str, kind: str | None = None, limit: int = 30) -> list[dict[str, Any]]:
         return self.store.list_media(project, kind, limit)
 
+    # ------------------------------------------------------------------ captures moteur (phase 4)
+    def _unity_root(self, p: ProjectConfig) -> Path:
+        root = (p.unity.project_path if p.unity else None) or p.repo_path
+        if not root:
+            raise UserError("Projet Unity sans chemin : renseigne repo_path ou unity.project_path.")
+        return Path(root).expanduser()
+
+    def list_engine_shots(self, project: str) -> dict[str, Any]:
+        p = self.cfg.project(project)
+        if p.engine == "unity":
+            root = self._unity_root(p)
+            try:
+                shots = unity_engine.scan_shots(root)
+            except (FileNotFoundError, ValueError) as exc:
+                raise UserError(str(exc)) from exc
+            uc = p.unity
+            build = uc.build_exe if uc else None
+            return {
+                "engine": "unity",
+                "shots": shots,
+                "editor_open": unity_engine.editor_is_open(root),
+                "build_exe": build,
+                "build_found": bool(build and Path(build).expanduser().exists()),
+                "default_target": uc.target if uc else "editor",
+                "hint": None if shots else "Aucun NapShot : installe le package Unity et crée des plans "
+                                           "(clic droit > NewsAutoPublisher > Nap Shot).",
+            }
+        if p.engine == "unreal":
+            rc = p.unreal
+            if not rc or not rc.shots:
+                raise UserError("Aucun plan Unreal configuré (section unreal.shots du projet dans config.yaml).")
+            return {
+                "engine": "unreal",
+                "shots": [{"name": k, "map": v.map, "sequence": v.sequence, "fps": v.fps,
+                           "description": v.description} for k, v in rc.shots.items()],
+                "editor_cmd_found": bool(rc.editor_cmd and Path(rc.editor_cmd).exists()),
+                "uproject_found": bool(rc.uproject and Path(rc.uproject).exists()),
+                "preset": rc.preset,
+            }
+        raise UserError(f"Moteur « {p.engine} » sans capture automatique (unity ou unreal).")
+
+    def engine_capture(self, project: str, shots: list[str] | None = None, mode: str = "video",
+                       target: str | None = None) -> dict[str, Any]:
+        p = self.cfg.project(project)
+        job_id = f"cap{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        out_dir = self.paths.media_dir(project) / "engine" / job_id
+        ff, _ = self._ffmpeg()
+
+        if p.engine == "unity":
+            uc = p.unity or UnityConfig()
+            root = self._unity_root(p)
+            available = unity_engine.scan_shots(root)
+            wanted = shots or [s["name"] for s in available]
+            missing = [n for n in wanted if n not in {s["name"] for s in available}]
+            if missing:
+                raise UserError(f"Plans introuvables dans les scènes : {', '.join(missing)}.")
+            if not wanted:
+                raise UserError("Aucun NapShot dans le projet.")
+            tgt = target or uc.target
+            note = ""
+            if tgt == "editor" and not unity_engine.editor_is_open(root):
+                if uc.build_exe and Path(uc.build_exe).expanduser().exists():
+                    tgt, note = "build", "Éditeur Unity fermé : capture via le build."
+                else:
+                    raise UserError("L'éditeur Unity n'a pas ce projet ouvert et aucun build_exe n'est configuré.")
+            if tgt == "build" and not (uc.build_exe and Path(uc.build_exe).expanduser().exists()):
+                raise UserError(f"Build Unity introuvable : {uc.build_exe} (unity.build_exe).")
+            by_scene: dict[str, list[str]] = {}
+            for s in available:
+                if s["name"] in wanted:
+                    by_scene.setdefault(s["scene"], []).append(s["name"])
+            descriptions = {s["name"]: s["description"] for s in available}
+            job = EngineJob(job_id, project, "unity", tgt, mode, wanted, str(out_dir), message=note)
+            work = lambda j: self._run_unity(j, p, uc, root, by_scene, descriptions, ff)  # noqa: E731
+        elif p.engine == "unreal":
+            rc = p.unreal
+            if not rc or not rc.shots:
+                raise UserError("Aucun plan Unreal configuré (unreal.shots).")
+            if mode != "video":
+                raise UserError("Unreal : seul le mode vidéo (Movie Render Queue) est pris en charge ; "
+                                "pour des captures de l'éditeur, utilise capture_screenshot.")
+            for path, label in ((rc.editor_cmd, "unreal.editor_cmd"), (rc.uproject, "unreal.uproject")):
+                if not path or not Path(path).exists():
+                    raise UserError(f"{label} introuvable : {path}")
+            wanted = shots or list(rc.shots)
+            missing = [n for n in wanted if n not in rc.shots]
+            if missing:
+                raise UserError(f"Plans Unreal inconnus : {', '.join(missing)} (connus : {', '.join(rc.shots)}).")
+            if not rc.preset and any(not rc.shots[n].preset for n in wanted):
+                raise UserError("Preset Movie Render Queue manquant (unreal.preset) : crée-le une fois dans "
+                                "l'éditeur (Movie Render Queue > Save as Preset).")
+            job = EngineJob(job_id, project, "unreal", "mrq", mode, wanted, str(out_dir))
+            work = lambda j: self._run_unreal(j, rc, ff)  # noqa: E731
+        else:
+            raise UserError(f"Moteur « {p.engine} » sans capture automatique.")
+
+        try:
+            self.jobs.submit(job, work)
+        except RuntimeError as exc:
+            raise UserError(str(exc)) from exc
+        return {**job.summary(), "next": "Suis l'avancement avec engine_capture_status(job_id, wait_seconds=…)."}
+
+    def engine_capture_status(self, job_id: str, wait_seconds: float = 0) -> dict[str, Any]:
+        job = self.jobs.get(job_id, self.paths.media)
+        if not job:
+            raise UserError(f"Capture inconnue : {job_id}")
+        if wait_seconds > 0 and job_id in self.jobs.jobs:
+            self.jobs.wait(job, wait_seconds)
+        return job.summary()
+
+    # --- Unity
+    def _run_unity(self, job: EngineJob, p: ProjectConfig, uc: UnityConfig, root: Path,
+                   by_scene: dict[str, list[str]], descriptions: dict[str, str], ff: str) -> None:
+        out = Path(job.out_dir)
+        for index, (scene, names) in enumerate(by_scene.items()):
+            sub = out / f"part{index + 1}"
+            req = unity_engine.build_request(f"{job.id}-{index + 1}", sub, names, scene, job.mode, uc.width,
+                                             uc.height, uc.fps, uc.format, uc.warmup_seconds, uc.msaa,
+                                             uc.include_ui)
+            job.update(message=f"Capture de {', '.join(names)} ({scene}) via {job.target}…")
+            if job.target == "editor":
+                result = self._unity_editor_request(job, root, req, sub, uc.timeout_seconds)
+            else:
+                result = self._unity_build_request(job, uc, req, sub)
+            if result.get("status") != "done":
+                raise RuntimeError(f"Unity : {result.get('error') or 'capture échouée'}")
+            job.update("assembling", "Assemblage des images…")
+            for shot in result.get("shots", []):
+                note = f"unity:{shot['name']}" + (f" — {descriptions.get(shot['name'])}" if descriptions.get(shot["name"]) else "")
+                if job.mode == "screenshot":
+                    for f in shot.get("files", []):
+                        job.media.append(self._register(job.project, Path(f), "unity:screenshot", note))
+                    continue
+                folder = Path(shot["folder"])
+                frames = sorted(folder.glob(f"frame_*.{uc.format}"))
+                if not frames:
+                    raise RuntimeError(f"Aucune image produite pour le plan {shot['name']}.")
+                video = self._media_path(job.project, f"unity-{_safe(shot['name'])}", ".mp4")
+                _assemble(ff, folder / f"frame_%05d.{uc.format}", shot.get("fps") or uc.fps, video)
+                job.media.append(self._register(job.project, video, "unity:video", note))
+                if not uc.keep_frames:
+                    shutil.rmtree(folder, ignore_errors=True)
+            job.save()
+        job.update("done", f"{len(job.media)} média(s) ajouté(s) à la médiathèque.")
+
+    def _unity_editor_request(self, job: EngineJob, root: Path, req: dict, sub: Path, timeout: float) -> dict:
+        request_path = unity_engine.request_file(root)
+        unity_engine.write_json(request_path, req)
+        start = time.time()
+        while True:
+            result = unity_engine.read_result(sub)
+            if result and result.get("status") in ("done", "error"):
+                return result
+            waited = time.time() - start
+            if request_path.exists() and waited > 120:
+                request_path.unlink(missing_ok=True)
+                raise RuntimeError("L'éditeur Unity n'a pas pris la requête en 2 minutes : package installé ? "
+                                   "Compilation ou mode Play en cours ? Fenêtre bloquée par une boîte de dialogue ?")
+            if waited > timeout:
+                raise RuntimeError(f"Pas de résultat Unity après {timeout:.0f} s (garde la vue Game visible).")
+            time.sleep(1.0)
+
+    def _unity_build_request(self, job: EngineJob, uc: UnityConfig, req: dict, sub: Path) -> dict:
+        sub.mkdir(parents=True, exist_ok=True)
+        req_file = sub / "request.json"
+        unity_engine.write_json(req_file, req)
+        log = sub / "player.log"
+        job.log = str(log)
+        cmd = [str(Path(uc.build_exe).expanduser()), unity_engine.REQUEST_ARG, str(req_file), "-screen-fullscreen", "0",
+               "-screen-width", str(uc.window[0]), "-screen-height", str(uc.window[1]), "-logFile", str(log),
+               *uc.build_args]
+        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            proc.wait(timeout=uc.timeout_seconds)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            raise RuntimeError(f"Le build Unity n'a pas terminé en {uc.timeout_seconds:.0f} s.")
+        result = unity_engine.read_result(sub)
+        if not result:
+            tail = log.read_text(encoding="utf-8", errors="replace")[-800:] if log.exists() else ""
+            raise RuntimeError("Le build s'est fermé sans result.json (package absent du build ? scène hors "
+                               f"Build Settings ?). Fin du journal :\n{tail}")
+        return result
+
+    # --- Unreal
+    def _run_unreal(self, job: EngineJob, rc: UnrealConfig, ff: str) -> None:
+        out = Path(job.out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        uproject = Path(rc.uproject)
+        render_dir = Path(rc.output_dir).expanduser() if rc.output_dir else unreal_engine.default_output_dir(uproject)
+        for name in job.shots:
+            shot = rc.shots[name]
+            log = out / f"{_safe(name)}.log"
+            job.log = str(log)
+            cmd = unreal_engine.build_command(rc.editor_cmd, str(uproject), shot.map, shot.sequence,
+                                              shot.preset or rc.preset, rc.window[0], rc.window[1], rc.extra_args)
+            job.update(message=f"Rendu Movie Render Queue de « {name} »…")
+            start = time.time()
+            with log.open("w", encoding="utf-8", errors="replace") as fh:
+                proc = subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT,
+                                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                try:
+                    proc.wait(timeout=rc.timeout_seconds)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    raise RuntimeError(f"Rendu Unreal de « {name} » non terminé en {rc.timeout_seconds:.0f} s.")
+            frames, video_file = unreal_engine.collect_output(render_dir, start)
+            note = f"unreal:{name}" + (f" — {shot.description}" if shot.description else "")
+            job.update("assembling", f"Assemblage de « {name} »…")
+            target = self._media_path(job.project, f"unreal-{_safe(name)}", ".mp4")
+            if frames:
+                tmp = out / f"{_safe(name)}_frames"
+                tmp.mkdir(exist_ok=True)
+                ext = frames[0].suffix.lower()
+                for i, f in enumerate(frames, 1):
+                    shutil.copyfile(f, tmp / f"frame_{i:05d}{ext}")
+                _assemble(ff, tmp / f"frame_%05d{ext}", shot.fps, target)
+                shutil.rmtree(tmp, ignore_errors=True)
+                if not rc.keep_frames:
+                    for f in frames:
+                        f.unlink(missing_ok=True)
+            elif video_file:
+                shutil.copyfile(video_file, target)
+            else:
+                tail = log.read_text(encoding="utf-8", errors="replace")[-1000:] if log.exists() else ""
+                raise RuntimeError(f"Aucune image trouvée dans {render_dir} après le rendu de « {name} » "
+                                   f"(code {proc.returncode}). Fin du journal :\n{tail}")
+            job.media.append(self._register(job.project, target, "unreal:mrq", note))
+            job.update("running")
+        job.update("done", f"{len(job.media)} vidéo(s) ajoutée(s) à la médiathèque.")
+
     def probe_media(self, path: str) -> dict[str, Any]:
         _, fp = self._ffmpeg()
         return probe(self._resolve_media(path), fp)
@@ -724,3 +970,13 @@ class App:
         d.status = "published" if all(s == "published" for s in statuses) else "partial"
         self.store.save_draft(d)
         return {"draft_id": d.id, "status": d.status, "channel": channel, "url": url}
+
+
+def _safe(name: str) -> str:
+    return "".join(c if c.isalnum() or c in "-_" else "_" for c in name) or "plan"
+
+
+def _assemble(ffmpeg: str, pattern: Path, fps: int, out: Path) -> None:
+    run_ffmpeg([ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-framerate", str(fps), "-i", str(pattern),
+                "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p", "-c:v", "libx264", "-preset", "medium",
+                "-crf", "16", "-movflags", "+faststart", str(out)])

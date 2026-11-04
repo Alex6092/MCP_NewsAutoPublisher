@@ -1,0 +1,12 @@
+{
+  "name": "com.newsautopublisher.capture",
+  "version": "0.3.0",
+  "displayName": "NewsAutoPublisher Capture",
+  "description": "Plans de caméra (NapShot) capturés automatiquement par Claude Code / NewsAutoPublisher : séquences d'images à temps fixe ou captures d'écran, depuis l'éditeur ouvert ou un build (-napRequest).",
+  "unity": "2021.3",
+  "author": {
+    "name": "Alex6092",
+    "url": "https://github.com/Alex6092/MCP_NewsAutoPublisher"
+  },
+  "keywords": ["capture", "trailer", "screenshot", "devlog"]
+}

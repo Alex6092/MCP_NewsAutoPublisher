@@ -32,9 +32,11 @@ Selon la config des canaux : X en mode intent (l'utilisateur clique « Poster »
 par monthly_budget_usd) ; YouTube en mode manuel (upload dans Studio) ou api (après audit Google).
 Pour les canaux en attente manuelle, demande les URL à l'utilisateur et enregistre-les avec mark_published.
 Un canal en mode api se connecte une fois avec connect_account.
+Captures moteur : list_engine_shots puis engine_capture (tâche de fond, suivie avec engine_capture_status) ;
+elles prennent la main sur l'éditeur Unity ou lancent le jeu / Unreal : seulement si l'utilisateur le demande.
 """
 
-mcp = MCPServer("newsautopublisher", instructions=INSTRUCTIONS, version="0.2.0")
+mcp = MCPServer("newsautopublisher", instructions=INSTRUCTIONS, version="0.3.0")
 _app: App | None = None
 
 READ = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
@@ -223,6 +225,37 @@ async def list_media(
 ) -> list[dict[str, Any]]:
     """Médias du projet (id m…, chemin, type, dimensions, durée, note), du plus récent au plus ancien."""
     return await _run(app().list_media, project, kind, limit)
+
+
+@mcp.tool(annotations=READ)
+async def list_engine_shots(project: str) -> dict[str, Any]:
+    """Plans capturables par le moteur : NapShot des scènes Unity (lus dans les fichiers .unity) ou
+    Level Sequences Unreal configurées. Indique aussi si l'éditeur Unity est ouvert / le build trouvé."""
+    return await _run(app().list_engine_shots, project)
+
+
+@mcp.tool(annotations=CAPTURE)
+async def engine_capture(
+    project: str,
+    shots: list[str] | None = Field(None, description="Noms des plans ; défaut : tous."),
+    mode: Literal["video", "screenshot"] = Field("video", description="video : plan animé ; screenshot : une image par point."),
+    target: Literal["editor", "build"] | None = Field(
+        None, description="Unity : editor (éditeur déjà ouvert, passe en mode Play) ou build (lance l'exécutable)."
+    ),
+) -> dict[str, Any]:
+    """Lance en arrière-plan la capture de plans par le moteur (Unity : package NapShot ; Unreal : Movie
+    Render Queue). Renvoie un job_id ; les vidéos assemblées arrivent dans la médiathèque du projet.
+    Prend le contrôle de l'éditeur Unity ou lance le jeu : à n'utiliser qu'avec l'accord de l'utilisateur."""
+    return await _run(app().engine_capture, project, shots, mode, target)
+
+
+@mcp.tool(annotations=READ)
+async def engine_capture_status(
+    job_id: str,
+    wait_seconds: float = Field(0, ge=0, le=600, description="Attendre la fin jusqu'à N secondes."),
+) -> dict[str, Any]:
+    """État d'une capture moteur (running / assembling / done / error) et médias produits (ids m…)."""
+    return await _run(app().engine_capture_status, job_id, wait_seconds)
 
 
 @mcp.tool(annotations=READ)

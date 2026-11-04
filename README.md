@@ -144,6 +144,57 @@ Chaque mode se configure une fois. Termine en demandant à Claude **« connecte 
 4. Demande « connecte le canal discord.exode ». Le bot se connecte une première fois, comme Discord
    l'exige, et Claude vérifie le type de salon.
 
+### 5. Facultatif : captures pilotées par le moteur
+
+Claude peut capturer lui-même des plans propres de tes jeux. C'est mieux qu'un enregistrement
+d'écran : rendu à temps fixe, résolution verticale exacte, sans interface.
+
+**Unity (Exode)**
+
+1. Dans Unity : *Window > Package Manager > + > Add package from git URL…*
+
+   ```
+   https://github.com/Alex6092/MCP_NewsAutoPublisher.git?path=/engines/unity/com.newsautopublisher.capture
+   ```
+
+2. Dans une scène :
+   1. Clic droit dans la hiérarchie : *NewsAutoPublisher > Nap Shot*.
+   2. Cadre la vue Scène et clique **« Ajouter un point depuis la vue Scène »** pour chaque point du
+      trajet de la caméra.
+   3. Donne au plan un `shotName`, une `description` et une `duration`.
+3. Dans `config.yaml`, section `unity` du projet, choisis la cible :
+   - `target: editor` : l'éditeur déjà ouvert passe en mode Play, capture, puis rouvre ta scène.
+   - `target: build` : lance ton exécutable (`build_exe`) avec `-napRequest`. La scène doit être
+     dans les Build Settings.
+4. Si le jeu a besoin d'un serveur ou d'une connexion pour afficher le monde, branche un démarrage
+   hors ligne avec `NapCapture.PrepareWorld`. Voir le README du package dans
+   `engines/unity/com.newsautopublisher.capture/`.
+
+Claude liste les plans avec `list_engine_shots`, en lisant les fichiers `.unity` (sérialisation
+« Force Text »). `engine_capture` les capture en arrière-plan, puis les vidéos arrivent dans la
+médiathèque.
+
+**Unreal (plugins)**
+
+1. Ouvre une Level Sequence par démonstration, par exemple une quête créée dans le graphe puis
+   jouée en jeu.
+2. Crée **une fois** un preset Movie Render Queue :
+   1. *Window > Cinematics > Movie Render Queue*, ajoute une séquence, puis ouvre *Settings*.
+   2. Choisis une sortie **PNG ou JPG**, la résolution voulue (1080×1920 pour du vertical) et le
+      dossier de sortie (par défaut `Saved/MovieRenders`).
+   3. *Save as Preset*, par exemple `/Game/NewsAutoPublisher/NAP_Vertical`.
+3. Dans `config.yaml`, section `unreal` du projet, renseigne :
+   - `editor_cmd` : chemin de `UnrealEditor-Cmd.exe` ;
+   - `uproject` ;
+   - `preset` ;
+   - les plans : nom → `map` + `sequence`.
+
+Le rendu se fait en ligne de commande (`-game -LevelSequence=… -MoviePipelineConfig=…`), dans un
+processus séparé : ton éditeur peut rester ouvert. Compte quelques minutes par plan.
+
+Les démonstrations dans l'éditeur (graphes, panneaux) restent mieux servies par
+`capture_screenshot` et `start_recording` sur la fenêtre « Unreal Editor ».
+
 ## Utilisation
 
 - **Préparer** : « publie une news sur ce qu'on vient de faire », ou `/news-autopublisher:news exode quêtes`.
@@ -151,6 +202,8 @@ Chaque mode se configure une fois. Termine en demandant à Claude **« connecte 
 - **Captures** : jeu ou éditeur ouvert, Claude peut faire une capture d'écran, enregistrer une
   séquence pendant que tu joues (« enregistre 20 s ») ou sauvegarder le replay OBS.
   - Tu peux aussi lui donner des fichiers : clips ShadowPlay, rendus Unity Recorder ou Movie Render Queue.
+- **Plans moteur** : « fais un devlog avec le plan hub_flyover ». Claude capture le NapShot Unity
+  ou rend la séquence Unreal, puis monte le short avec.
 - **Ta voix** : « je veux enregistrer la voix moi-même ».
   1. Claude te donne le script numéroté et l'emplacement où déposer le fichier.
   2. Après l'enregistrement : « j'ai enregistré la voix » → nettoyage, normalisation, sous-titres
@@ -189,11 +242,13 @@ Le dossier contient :
   - `video/` : montage ffmpeg et sous-titres ASS.
   - `voice/` : Piper, ElevenLabs, voix enregistrée.
   - `capture/` : OBS, ffmpeg gdigrab/ddagrab.
+  - `engines/` : captures Unity (protocole du package NapShot) et Unreal (Movie Render Queue).
   - `publishers/` : Discord (webhook, crosspost par bot), X (intent, API), YouTube (manuel, API).
 - `plugins/news-autopublisher/skills/` : skills `news` (préparation, exécutée dans le sous-agent)
   et `publish` (validation et publication).
 - `plugins/news-autopublisher/agents/news-producer.md` : le sous-agent, qui n'a pas accès aux
   outils de publication.
+- `engines/unity/com.newsautopublisher.capture/` : le package Unity (C#) à installer dans tes projets.
 
 Variables utiles :
 
@@ -207,8 +262,14 @@ Variables utiles :
 2. ✅ Shorts : captures OBS / fenêtre, Piper, ElevenLabs, ta voix, montage, YouTube manuel.
 3. ✅ Modes API : X API avec plafond de budget, YouTube API (après audit) avec mise en ligne
    programmée, crosspost Discord par bot.
-4. ⏳ Captures pilotées par les moteurs :
-   - Unreal : Movie Render Queue en ligne de commande, `HighResShot` ;
-   - Unity : mode `-autocapture` du build ou Unity Recorder.
+4. ✅ Captures pilotées par les moteurs :
+   - Unity : package NapShot, depuis l'éditeur ou un build ;
+   - Unreal : Movie Render Queue en ligne de commande.
+
+Pistes suivantes :
+
+- planification des publications (calendrier) ;
+- statistiques de vues et de réactions ;
+- sous-titres multilingues sur une même vidéo.
 
 Police incluse : Inter (SIL Open Font License 1.1).

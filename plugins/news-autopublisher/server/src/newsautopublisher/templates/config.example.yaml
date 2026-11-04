@@ -31,6 +31,13 @@ projects:
       # music: D:/Dev/Exode/Marketing/music   # dossier de musiques libres de droits
     voice:
       engine: piper                    # piper | elevenlabs | recorded | none
+    unity:                             # captures de plans NapShot (package Unity, voir README)
+      target: editor                   # editor = éditeur ouvert (mode Play automatique) ; build = exécutable
+      # build_exe: D:/Dev/Exode/Builds/Windows/Exode.exe
+      # build_args: ["-offline"]       # arguments propres à ton jeu pour démarrer sans serveur
+      width: 1080                      # résolution des images capturées (verticale pour les shorts)
+      height: 1920
+      fps: 30
     channels:
       fr: [discord.exode, x.main, youtube.main]
 
@@ -51,6 +58,16 @@ projects:
     hashtags: ["#UnrealEngine", "#UE5", "#gamedev"]
     capture:
       window_title: Unreal Editor
+    unreal:                            # rendu de Level Sequences par Movie Render Queue (voir README)
+      editor_cmd: C:/Program Files/Epic Games/UE_5.4/Engine/Binaries/Win64/UnrealEditor-Cmd.exe
+      uproject: D:/Dev/UE/DQM_Demo/DQM_Demo.uproject
+      preset: /Game/NewsAutoPublisher/NAP_Vertical   # preset MRQ créé une fois dans l'éditeur
+      shots:
+        quest_graph_demo:
+          map: /Game/Maps/Demo
+          sequence: /Game/Cinematics/QuestDemo
+          fps: 30
+          description: "Création d'une quête dans le graphe, puis la quête en jeu"
     channels:
       en: [discord.plugins_en, x.main, youtube.main]
       fr: [discord.plugins_fr]

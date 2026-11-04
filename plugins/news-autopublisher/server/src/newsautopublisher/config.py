@@ -55,6 +55,47 @@ class ProjectVoice(_Model):
     voices: dict[str, str] = Field(default_factory=dict)  # langue -> voix (Piper ou id ElevenLabs)
 
 
+class UnityConfig(_Model):
+    """Capture des plans NapShot (package engines/unity/com.newsautopublisher.capture)."""
+
+    project_path: str | None = None  # défaut : repo_path
+    target: Literal["editor", "build"] = "editor"  # editor = éditeur déjà ouvert ; build = exécutable
+    build_exe: str | None = None  # ex. D:/Dev/Exode/Builds/Windows/Exode.exe
+    build_args: list[str] = Field(default_factory=list)  # arguments en plus (ex. "-offline")
+    window: tuple[int, int] = (960, 540)  # taille de la fenêtre du build (la capture garde sa résolution)
+    width: int = 1080
+    height: int = 1920
+    fps: int = 30
+    format: Literal["jpg", "png"] = "jpg"
+    warmup_seconds: float = 1.5
+    msaa: int = 4
+    include_ui: bool = False
+    timeout_seconds: float = 900
+    keep_frames: bool = False
+
+
+class UnrealShot(_Model):
+    map: str  # ex. /Game/Maps/Demo
+    sequence: str  # ex. /Game/Cinematics/QuestDemo
+    preset: str | None = None  # remplace le preset par défaut pour ce plan
+    fps: int = 30
+    description: str = ""
+
+
+class UnrealConfig(_Model):
+    """Rendu de Level Sequences avec Movie Render Queue en ligne de commande."""
+
+    editor_cmd: str | None = None  # ex. C:/Program Files/Epic Games/UE_5.4/Engine/Binaries/Win64/UnrealEditor-Cmd.exe
+    uproject: str | None = None  # ex. D:/Dev/UE/DQM_Demo/DQM_Demo.uproject
+    preset: str | None = None  # ex. /Game/NewsAutoPublisher/NAP_Vertical (preset MRQ)
+    output_dir: str | None = None  # défaut : <dossier du .uproject>/Saved/MovieRenders
+    window: tuple[int, int] = (1280, 720)
+    extra_args: list[str] = Field(default_factory=list)
+    timeout_seconds: float = 1800
+    keep_frames: bool = False
+    shots: dict[str, UnrealShot] = Field(default_factory=dict)
+
+
 class ProjectConfig(_Model):
     name: str
     repo_path: str | None = None
@@ -70,6 +111,8 @@ class ProjectConfig(_Model):
     brand: BrandConfig = Field(default_factory=BrandConfig)
     voice: ProjectVoice = Field(default_factory=ProjectVoice)
     channels: dict[str, list[str]] = Field(default_factory=dict)  # langue -> ids de canaux
+    unity: UnityConfig | None = None
+    unreal: UnrealConfig | None = None
 
 
 class ChannelConfig(_Model):

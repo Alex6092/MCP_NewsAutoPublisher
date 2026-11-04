@@ -51,6 +51,14 @@ Suis `references/short-recipes.md`. En résumé :
 
 1. **Rushes**, par ordre de préférence :
    - `list_media(project)` : médias récents déjà capturés.
+   - **Plans du moteur** : `list_engine_shots(project)`, qui renvoie les NapShot Unity ou les Level
+     Sequences Unreal.
+     - Lance `engine_capture` seulement si la demande le prévoit (« avec des images du jeu »,
+       « capture le plan X »). Cette capture prend la main sur l'éditeur Unity (mode Play) ou lance
+       le jeu ou Unreal.
+     - Sinon, liste les plans disponibles dans ton rapport et propose la capture.
+     - Après le lancement, suis la capture avec `engine_capture_status(job_id, wait_seconds=300)`
+       jusqu'à `done`, puis utilise les ids `m…` renvoyés. Un rendu Unreal peut prendre 5 à 20 minutes.
    - Si le jeu ou l'éditeur est ouvert (`list_windows`, Windows), `capture_screenshot` ou
      `start_recording`/`stop_recording`. Pour un clip de gameplay, demande à l'utilisateur de jouer
      la séquence, ou de déclencher `save_replay` si le tampon de relecture d'OBS tourne.

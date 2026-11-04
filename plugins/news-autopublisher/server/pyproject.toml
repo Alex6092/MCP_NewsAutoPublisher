@@ -1,6 +1,6 @@
 [project]
 name = "newsautopublisher"
-version = "0.2.0"
+version = "0.3.0"
 description = "Serveur MCP : news de projets, shorts verticaux et publication Discord / X / YouTube"
 requires-python = ">=3.11"
 dependencies = [
