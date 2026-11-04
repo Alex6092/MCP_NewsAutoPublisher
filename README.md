@@ -48,6 +48,10 @@ Pourquoi X et YouTube ne sont pas en API par défaut :
 
 ## Installation (Windows)
 
+> **Installation assistée** : pour que Claude Code installe, configure et teste tout avec toi
+> (prérequis, plugin, Discord, short, captures, Unity, Unreal, suggestions), suis
+> [docs/prompt-installation-locale.md](docs/prompt-installation-locale.md).
+
 ### 1. Prérequis
 
 Dans PowerShell :
