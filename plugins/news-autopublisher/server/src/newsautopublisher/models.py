@@ -107,6 +107,26 @@ class Draft(_Model):
     approved_at: str | None = None
 
 
+class ProceduralShot(_Model):
+    """Plan de caméra généré automatiquement autour d'un objet (Unity) ou d'un acteur (Unreal)."""
+
+    name: str = Field(..., description="Nom unique du plan (devient le nom du média).")
+    target: str = Field(..., description="Nom du GameObject Unity ou libellé de l'acteur Unreal à montrer.")
+    move: Literal["orbit", "dolly", "pullback", "flyover", "static", "follow"] = Field(
+        "orbit",
+        description="orbit : tour autour ; dolly : avance vers ; pullback : recul révélant le décor ; "
+                    "flyover : survol en hauteur ; static : quasi fixe ; follow : poursuite (Unity uniquement).",
+    )
+    duration: float = Field(5.0, ge=1.0, le=30.0)
+    distance: float = Field(1.0, ge=0.3, le=10.0, description="1 = l'objet remplit le cadre ; 2 = plus large.")
+    elevation: float = Field(15.0, ge=-60.0, le=85.0, description="Hauteur de la caméra en degrés.")
+    angle: float = Field(25.0, ge=-180.0, le=180.0, description="Décalage par rapport à l'avant de l'objet.")
+    arc: float = Field(90.0, gt=0.0, le=360.0, description="Amplitude de l'orbite en degrés.")
+    fov: float = Field(0.0, ge=0.0, le=120.0, description="Unity : champ de vision (0 = caméra principale).")
+    focal_length: float = Field(0.0, ge=0.0, le=300.0, description="Unreal : focale en mm (0 = 24 mm).")
+    map: str | None = Field(None, description="Unreal : map de l'acteur, si différente de celle par défaut.")
+
+
 class PublishResult(_Model):
     channel: str
     platform: str

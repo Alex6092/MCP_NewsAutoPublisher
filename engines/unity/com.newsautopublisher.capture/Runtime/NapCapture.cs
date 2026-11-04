@@ -104,6 +104,8 @@ namespace NewsAutoPublisher.Capture
         NapCaptureRequest request;
         NapCaptureResult result;
         readonly List<NapShotResult> shotResults = new List<NapShotResult>();
+        readonly List<string> warnings = new List<string>();
+        readonly List<GameObject> generated = new List<GameObject>();
         bool finished;
 
         public void Begin(NapCaptureRequest r)
@@ -174,10 +176,27 @@ namespace NewsAutoPublisher.Capture
             }
 
             List<NapShot> shots = ResolveShots();
+            if (request.procedural != null)
+            {
+                foreach (NapProceduralShot spec in request.procedural)
+                {
+                    string error;
+                    NapShot built = NapProcedural.Build(spec, generated, out error);
+                    if (built != null)
+                    {
+                        shots.Add(built);
+                    }
+                    else
+                    {
+                        warnings.Add(error);
+                        Debug.LogWarning("[NewsAutoPublisher] " + error);
+                    }
+                }
+            }
             if (shots.Count == 0)
             {
-                Fail("Aucun NapShot trouvé (" + string.Join(", ", request.shots) + ") dans la scène « "
-                     + SceneManager.GetActiveScene().name + " ».");
+                Fail("Aucun plan à capturer dans la scène « " + SceneManager.GetActiveScene().name + " ». "
+                     + string.Join(" ", warnings.ToArray()));
                 yield break;
             }
 
@@ -215,6 +234,10 @@ namespace NewsAutoPublisher.Capture
             }
             if (request.shots == null || request.shots.Length == 0)
             {
+                if (request.procedural != null && request.procedural.Length > 0)
+                {
+                    return new List<NapShot>(); // uniquement les plans générés
+                }
                 found.Sort((a, b) => string.CompareOrdinal(a.shotName, b.shotName));
                 return found;
             }
@@ -228,6 +251,7 @@ namespace NewsAutoPublisher.Capture
                 }
                 else
                 {
+                    warnings.Add("Plan introuvable : " + name);
                     Debug.LogWarning("[NewsAutoPublisher] Plan introuvable : " + name);
                 }
             }
@@ -450,6 +474,11 @@ namespace NewsAutoPublisher.Capture
             finished = true;
             Time.captureFramerate = 0;
             result.shots = shotResults.ToArray();
+            result.warnings = warnings.ToArray();
+            foreach (GameObject go in generated)
+            {
+                if (go != null) Destroy(go);
+            }
             try
             {
                 if (!string.IsNullOrEmpty(request.outputDir))

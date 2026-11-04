@@ -1,6 +1,7 @@
 """Captures moteur : un faux éditeur Unity, un faux build et un faux Unreal produisent des images."""
 
 import json
+import os
 import subprocess
 import sys
 import textwrap
@@ -44,7 +45,7 @@ FAKE_ENGINE = textwrap.dedent('''
 
     def produce(req):
         out = Path(req["outputDir"]); shots = []
-        for name in req["shots"]:
+        for name in list(req["shots"]) + [p["name"] for p in req.get("procedural", [])]:
             folder = out / name; folder.mkdir(parents=True, exist_ok=True)
             n = 1 if req["mode"] == "screenshot" else 10
             pattern = "still_%02d.jpg" if req["mode"] == "screenshot" else "frame_%05d.jpg"
@@ -59,7 +60,23 @@ FAKE_ENGINE = textwrap.dedent('''
         args = sys.argv[1:]
         if "-napRequest" in args:  # build Unity
             produce(json.loads(Path(args[args.index("-napRequest") + 1]).read_text()))
-        else:  # Unreal : écrit une séquence PNG dans Saved/MovieRenders
+        elif any(a.startswith("-ExecutePythonScript=") for a in args):  # Unreal, mode python
+            script = Path(next(a for a in args if a.startswith("-ExecutePythonScript=")).split("=", 1)[1])
+            assert script.exists() and script.name == "nap_unreal.py", script
+            req = json.loads(Path(os.environ["NAP_UNREAL_REQUEST"]).read_text())
+            if req["mode"] == "list_actors":
+                result = {"status": "done", "actors": [{"label": "QuestBoard", "class": "StaticMeshActor"},
+                                                       {"label": "Sky", "class": "SkyAtmosphere"}]}
+            else:
+                shots = []
+                for shot in req["shots"]:
+                    folder = Path(req["output_dir"]) / shot["name"]; folder.mkdir(parents=True, exist_ok=True)
+                    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=s=108x192:r=30",
+                                    "-frames:v", "6", "-start_number", "0", str(folder / "frame_%05d.png")], check=True)
+                    shots.append({"name": shot["name"], "folder": str(folder)})
+                result = {"status": "done", "shots": shots, "request": req}
+            Path(req["result"]).write_text(json.dumps(result))
+        else:  # Unreal CLI : écrit une séquence PNG dans Saved/MovieRenders
             uproject = Path(args[0])
             out = uproject.parent / "Saved" / "MovieRenders"; out.mkdir(parents=True, exist_ok=True)
             assert any(a.startswith("-LevelSequence=/Game/Cinematics/Demo.Demo") for a in args), args
@@ -152,8 +169,10 @@ def test_unity_editor_capture_via_request_file(data_dir, unity_project, tmp_path
                 return
             time.sleep(0.1)
 
+    with pytest.raises(UserError, match="mode Play"):  # règle par défaut : accord requis pour l'éditeur
+        app.engine_capture("exode", mode="screenshot")
     threading.Thread(target=fake_editor, daemon=True).start()
-    job = app.engine_capture("exode", mode="screenshot")
+    job = app.engine_capture("exode", mode="screenshot", user_requested=True)
     assert job["target"] == "editor"
     status = app.engine_capture_status(job["id"], wait_seconds=60)
     assert status["status"] == "done", status
@@ -173,6 +192,7 @@ def test_unreal_mrq_capture(data_dir, tmp_path):
     uproject.write_text("{}")
     set_project(data_dir, engine="unreal", unreal={
         "editor_cmd": str(fake_exe(tmp_path)), "uproject": str(uproject), "preset": "/Game/NAP/Vertical",
+        "render_mode": "cli",
         "shots": {"demo": {"map": "/Game/Maps/Demo", "sequence": "/Game/Cinematics/Demo", "fps": 24,
                            "description": "Démo du graphe de quêtes"}},
     })
@@ -193,7 +213,7 @@ def test_unreal_requires_preset(data_dir, tmp_path):
     uproject = tmp_path / "Demo.uproject"
     uproject.write_text("{}")
     set_project(data_dir, engine="unreal", unreal={
-        "editor_cmd": sys.executable, "uproject": str(uproject),
+        "editor_cmd": sys.executable, "uproject": str(uproject), "render_mode": "cli",
         "shots": {"demo": {"map": "/Game/Maps/Demo", "sequence": "/Game/Seq/Demo"}},
     })
     with pytest.raises(UserError, match="Preset Movie Render Queue"):

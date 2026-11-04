@@ -41,6 +41,11 @@ Rythme de lecture : environ 2,5 mots par seconde, donc 75 mots ≈ 30 s.
   - `fit: contain` + `zoom: 1.3` donne une bande large sur fond flouté ;
   - `fit: cover` recadre au centre (convient à un personnage centré) ;
   - pour un plan cinématique déjà vertical, laisser `zoom: 1`.
+- **Plans procéduraux** (paramètres utiles) :
+  - `distance` : 1 = l'objet remplit le cadre, 1.5 à 2 = plus de décor ;
+  - `elevation` : 10 à 25° pour un objet ou un personnage, 50° et plus pour une zone ;
+  - `angle` : 25° donne une vue de 3/4 de face, 180° une vue de dos ;
+  - `arc` : 60 à 120° pour une orbite de 5 s.
 - **Plans moteur** :
   - Les captures Unity sont déjà en 1080×1920 : utilise `fit: cover` et `zoom: 1`.
   - Les rendus Unreal sont au format du preset (souvent 16:9) : `contain` + `zoom` comme une capture d'écran.

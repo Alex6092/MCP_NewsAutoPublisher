@@ -91,6 +91,7 @@ def build_request(
     job_id: str,
     output_dir: Path,
     shots: list[str],
+    procedural: list[dict[str, Any]],
     scene: str,
     mode: str,
     width: int,
@@ -106,6 +107,7 @@ def build_request(
         "id": job_id,
         "mode": mode,
         "shots": shots,
+        "procedural": procedural,
         "scene": scene,
         "width": width,
         "height": height,
@@ -135,3 +137,66 @@ def read_result(output_dir: Path) -> dict[str, Any] | None:
         return json.loads(path.read_text(encoding="utf-8-sig"))
     except (json.JSONDecodeError, OSError):
         return None  # en cours d'écriture
+
+
+M_NAME = re.compile(r"^\s{2}m_Name: (.*)$", re.M)
+PREFAB_NAME = re.compile(r"propertyPath: m_Name\n\s+value: (.*)$", re.M)
+
+
+def scene_files(project: Path, scene: str | None = None, max_files: int = 400) -> list[Path]:
+    if scene:
+        p = project / scene
+        if not p.exists():
+            raise FileNotFoundError(f"Scène introuvable : {scene}")
+        return [p]
+    return sorted((project / "Assets").rglob("*.unity"))[:max_files]
+
+
+def scan_objects(project: Path, scene: str | None = None, contains: str | None = None,
+                 limit: int = 150) -> list[dict[str, Any]]:
+    """Noms des GameObjects (et instances de prefabs renommées) par scène, filtrés par sous-chaîne."""
+    needle = (contains or "").lower()
+    counts: dict[tuple[str, str], int] = {}
+    for f in scene_files(project, scene):
+        text = f.read_text(encoding="utf-8", errors="replace")
+        if not text.startswith("%YAML"):
+            continue
+        rel = f.relative_to(project).as_posix()
+        names = []
+        for block in text.split("\n--- !u!"):
+            if block.startswith("1 &") and "\nGameObject:" in block[:80]:
+                m = M_NAME.search(block)
+                if m:
+                    names.append(_yaml_scalar(m.group(1)))
+            elif block.startswith("1001 &"):  # instance de prefab : nom surchargé
+                names += [_yaml_scalar(n) for n in PREFAB_NAME.findall(block)]
+        for n in names:
+            if n and (not needle or needle in n.lower()):
+                counts[(rel, n)] = counts.get((rel, n), 0) + 1
+    out = [{"scene": sc, "name": n, "count": c} for (sc, n), c in counts.items()]
+    out.sort(key=lambda o: (o["scene"], o["name"].lower()))
+    return out[:limit]
+
+
+def build_scenes(project: Path) -> list[str]:
+    """Scènes activées dans les Build Settings, dans l'ordre."""
+    f = project / "ProjectSettings" / "EditorBuildSettings.asset"
+    if not f.exists():
+        return []
+    scenes, enabled = [], None
+    for line in f.read_text(encoding="utf-8", errors="replace").splitlines():
+        s = line.strip()
+        if s.startswith("- enabled:"):
+            enabled = s.endswith("1")
+        elif s.startswith("path:") and enabled:
+            scenes.append(s.split(":", 1)[1].strip())
+    return scenes
+
+
+def scene_for_target(project: Path, target: str) -> str | None:
+    """Première scène contenant un objet de ce nom (exact, puis partiel)."""
+    exact = [o for o in scan_objects(project, contains=target, limit=1000) if o["name"] == target]
+    if exact:
+        return exact[0]["scene"]
+    partial = scan_objects(project, contains=target, limit=1)
+    return partial[0]["scene"] if partial else None

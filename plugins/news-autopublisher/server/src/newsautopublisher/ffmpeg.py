@@ -10,6 +10,7 @@ from typing import Any
 
 IMAGE_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif"}
 AUDIO_EXT = {".wav", ".mp3", ".flac", ".ogg", ".m4a", ".aac", ".opus"}
+VIDEO_EXT = {".mp4", ".mov", ".mkv", ".webm", ".avi", ".m4v"}
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
@@ -79,7 +80,7 @@ def probe(path: str | Path, ffprobe: str) -> dict[str, Any]:
     ext = p.suffix.lower()
     if ext in IMAGE_EXT:
         kind = "image"
-    elif video and (duration or 0) > 0.2 and ext not in AUDIO_EXT:
+    elif video and (ext in VIDEO_EXT or ((duration or 0) > 0.2 and ext not in AUDIO_EXT)):
         kind = "video"
     elif audio:
         kind = "audio"

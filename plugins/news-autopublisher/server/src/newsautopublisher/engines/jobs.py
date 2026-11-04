@@ -29,6 +29,7 @@ class EngineJob:
     finished: float | None = None
     log: str | None = None
     media: list[dict[str, Any]] = field(default_factory=list)
+    data: dict[str, Any] = field(default_factory=dict)
 
     def save(self) -> None:
         path = Path(self.out_dir) / "job.json"

@@ -37,6 +37,21 @@ Les plans sont visibles dans la vue Scène (trajet violet et pyramides de camér
 en lisant les fichiers `.unity` : garde la sérialisation en texte (*Project Settings > Editor >
 Asset Serialization : Force Text*, réglage par défaut).
 
+## Plans automatiques (sans rien placer)
+
+Claude peut aussi demander un plan **procédural** autour de n'importe quel objet de la scène, par
+son nom. Mouvements possibles :
+
+- orbite ;
+- travelling avant (`dolly`) ;
+- recul (`pullback`) ;
+- survol (`flyover`) ;
+- plan fixe (`static`) ;
+- poursuite (`follow`).
+
+Le trajet est calculé à partir de l'encombrement de l'objet (renderers, sinon colliders). Rien à
+préparer dans la scène.
+
 ## Comment Claude lance la capture
 
 - **Éditeur ouvert** (recommandé pendant le développement) :

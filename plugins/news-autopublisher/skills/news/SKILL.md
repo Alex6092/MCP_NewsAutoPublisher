@@ -51,14 +51,26 @@ Suis `references/short-recipes.md`. En résumé :
 
 1. **Rushes**, par ordre de préférence :
    - `list_media(project)` : médias récents déjà capturés.
-   - **Plans du moteur** : `list_engine_shots(project)`, qui renvoie les NapShot Unity ou les Level
-     Sequences Unreal.
-     - Lance `engine_capture` seulement si la demande le prévoit (« avec des images du jeu »,
-       « capture le plan X »). Cette capture prend la main sur l'éditeur Unity (mode Play) ou lance
-       le jeu ou Unreal.
-     - Sinon, liste les plans disponibles dans ton rapport et propose la capture.
-     - Après le lancement, suis la capture avec `engine_capture_status(job_id, wait_seconds=300)`
-       jusqu'à `done`, puis utilise les ids `m…` renvoyés. Un rendu Unreal peut prendre 5 à 20 minutes.
+   - **Plans du moteur**, capturés automatiquement :
+     1. Repère dans les changements ce qu'il faut montrer : nouveaux prefabs, objets, PNJ, zones
+        (Unity) ou acteurs et Blueprints (Unreal).
+     2. Trouve leurs noms exacts avec `list_engine_targets(project, contains=…)`. Pour Unreal, cet
+        outil lance l'éditeur : suis le résultat avec `engine_capture_status`.
+     3. Réutilise les plans existants s'ils conviennent (`list_engine_shots`). Sinon, décris des
+        **plans procéduraux** dans `engine_capture(procedural=[…])` :
+        - `orbit` pour un objet, un personnage ou un équipement ;
+        - `flyover` pour une zone ou un village ;
+        - `dolly` pour une révélation ;
+        - `pullback` pour finir sur le décor ;
+        - `follow` pour un personnage en mouvement (Unity uniquement).
+        Prévois 4 à 6 s par plan et 2 ou 3 plans au maximum.
+     4. Appelle `engine_capture` **sans** `user_requested` : la règle de l'utilisateur s'applique
+        (par défaut, automatique pour Unreal et le build Unity). Si l'outil refuse, parce qu'il faudrait
+        l'éditeur Unity ouvert, ne force pas. Note-le dans ton rapport et propose la capture.
+        `user_requested=true` est réservé à une demande ou un accord explicite de l'utilisateur.
+     5. Suis la capture avec `engine_capture_status(job_id, wait_seconds=300)` jusqu'à `done`, puis
+        utilise les ids `m…`. Un rendu Unreal prend 3 à 20 min. Signale l'avertissement « build plus
+        ancien que le dernier commit » s'il apparaît.
    - Si le jeu ou l'éditeur est ouvert (`list_windows`, Windows), `capture_screenshot` ou
      `start_recording`/`stop_recording`. Pour un clip de gameplay, demande à l'utilisateur de jouer
      la séquence, ou de déclencher `save_replay` si le tampon de relecture d'OBS tourne.

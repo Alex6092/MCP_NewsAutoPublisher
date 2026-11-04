@@ -32,6 +32,9 @@ class CaptureConfig(_Model):
     obs_scene: str | None = None  # scène OBS à activer avant capture
     monitor: int = 0  # écran pour ddagrab
     fps: int = 30
+    # Captures moteur lancées par Claude sans demander : never | background (rendu Unreal et build Unity,
+    # sans toucher à l'éditeur Unity ouvert) | always (y compris l'éditeur Unity ouvert).
+    engine_auto: Literal["never", "background", "always"] = "background"
 
 
 class BrandConfig(_Model):
@@ -83,11 +86,22 @@ class UnrealShot(_Model):
 
 
 class UnrealConfig(_Model):
-    """Rendu de Level Sequences avec Movie Render Queue en ligne de commande."""
+    """Rendu de plans Unreal par Movie Render Queue.
 
-    editor_cmd: str | None = None  # ex. C:/Program Files/Epic Games/UE_5.4/Engine/Binaries/Win64/UnrealEditor-Cmd.exe
+    render_mode python (défaut) : un script lancé dans l'éditeur génère les séquences si besoin et
+    configure le rendu lui-même (aucun preset requis). cli : rendu -game -LevelSequence avec un preset.
+    """
+
+    editor_cmd: str | None = None  # ex. C:/Program Files/Epic Games/UE_5.5/Engine/Binaries/Win64/UnrealEditor-Cmd.exe
     uproject: str | None = None  # ex. D:/Dev/UE/DQM_Demo/DQM_Demo.uproject
-    preset: str | None = None  # ex. /Game/NewsAutoPublisher/NAP_Vertical (preset MRQ)
+    render_mode: Literal["python", "cli"] = "python"
+    default_map: str | None = None  # map des plans générés si aucune n'est précisée
+    asset_dir: str = "/Game/NewsAutoPublisher/Auto"  # où ranger les séquences générées
+    width: int = 1080
+    height: int = 1920
+    fps: int = 30
+    format: Literal["png", "jpg"] = "png"
+    preset: str | None = None  # preset MRQ (obligatoire en mode cli, base de configuration en mode python)
     output_dir: str | None = None  # défaut : <dossier du .uproject>/Saved/MovieRenders
     window: tuple[int, int] = (1280, 720)
     extra_args: list[str] = Field(default_factory=list)

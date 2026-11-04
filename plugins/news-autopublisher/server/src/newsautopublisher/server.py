@@ -14,7 +14,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from mcp_types import ToolAnnotations
 from pydantic import Field
 
-from .models import DiscordPost, XPost, YouTubePost
+from .models import DiscordPost, ProceduralShot, XPost, YouTubePost
 from .service import USER_ERRORS, App, UserError
 from .video.storyboard import Storyboard
 
@@ -32,11 +32,12 @@ Selon la config des canaux : X en mode intent (l'utilisateur clique « Poster »
 par monthly_budget_usd) ; YouTube en mode manuel (upload dans Studio) ou api (après audit Google).
 Pour les canaux en attente manuelle, demande les URL à l'utilisateur et enregistre-les avec mark_published.
 Un canal en mode api se connecte une fois avec connect_account.
-Captures moteur : list_engine_shots puis engine_capture (tâche de fond, suivie avec engine_capture_status) ;
-elles prennent la main sur l'éditeur Unity ou lancent le jeu / Unreal : seulement si l'utilisateur le demande.
+Captures moteur : list_engine_targets / list_engine_shots puis engine_capture (plans existants ou
+procéduraux autour d'objets), suivies avec engine_capture_status. La règle capture.engine_auto décide
+de ce qui peut partir sans accord ; user_requested=true seulement après accord explicite de l'utilisateur.
 """
 
-mcp = MCPServer("newsautopublisher", instructions=INSTRUCTIONS, version="0.3.0")
+mcp = MCPServer("newsautopublisher", instructions=INSTRUCTIONS, version="0.4.0")
 _app: App | None = None
 
 READ = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
@@ -234,19 +235,47 @@ async def list_engine_shots(project: str) -> dict[str, Any]:
     return await _run(app().list_engine_shots, project)
 
 
+@mcp.tool(annotations=READ)
+async def list_engine_targets(
+    project: str,
+    scene: str | None = Field(None, description="Unity : Assets/…/Scene.unity ; Unreal : /Game/Maps/… (défaut : unreal.default_map)."),
+    contains: str | None = Field(None, description="Filtre sur le nom (ex. « Quest »)."),
+    limit: int = Field(150, ge=1, le=1000),
+) -> dict[str, Any]:
+    """Objets filmables : noms des GameObjects des scènes Unity (lecture directe des fichiers), ou acteurs d'une
+    map Unreal (lance Unreal en arrière-plan : résultat via engine_capture_status, champ data.actors)."""
+    return await _run(app().list_engine_targets, project, scene, contains, limit)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False))
+async def engine_setup(
+    project: str,
+    apply: bool = Field(False, description="false : diagnostic seul ; true : applique les changements."),
+) -> dict[str, Any]:
+    """Prépare le projet pour les captures automatiques : Unity (ajoute le package NewsAutoPublisher Capture au
+    manifest, vérifie la sérialisation texte) ; Unreal (active Python, Sequencer Scripting, Editor Scripting et
+    Movie Render Queue dans le .uproject). Modifie des fichiers du projet : apply=true seulement avec accord."""
+    return await _run(app().engine_setup, project, apply)
+
+
 @mcp.tool(annotations=CAPTURE)
 async def engine_capture(
     project: str,
-    shots: list[str] | None = Field(None, description="Noms des plans ; défaut : tous."),
-    mode: Literal["video", "screenshot"] = Field("video", description="video : plan animé ; screenshot : une image par point."),
-    target: Literal["editor", "build"] | None = Field(
-        None, description="Unity : editor (éditeur déjà ouvert, passe en mode Play) ou build (lance l'exécutable)."
+    shots: list[str] | None = Field(None, description="Plans existants (NapShot / séquences configurées) ; défaut : tous s'il n'y a pas de procéduraux."),
+    procedural: list[ProceduralShot] | None = Field(None, description="Plans générés autour d'objets : aucun placement manuel nécessaire."),
+    scene: str | None = Field(None, description="Unity : scène à charger (sinon celle qui contient la cible) ; Unreal : map par défaut."),
+    mode: Literal["video", "screenshot"] = Field("video", description="video : plan animé ; screenshot : images fixes (Unity)."),
+    target: Literal["editor", "build"] | None = Field(None, description="Unity : editor (éditeur ouvert) ou build (exécutable)."),
+    user_requested: bool = Field(
+        False, description="true UNIQUEMENT si l'utilisateur a demandé ou accepté cette capture dans la conversation."
     ),
 ) -> dict[str, Any]:
-    """Lance en arrière-plan la capture de plans par le moteur (Unity : package NapShot ; Unreal : Movie
-    Render Queue). Renvoie un job_id ; les vidéos assemblées arrivent dans la médiathèque du projet.
-    Prend le contrôle de l'éditeur Unity ou lance le jeu : à n'utiliser qu'avec l'accord de l'utilisateur."""
-    return await _run(app().engine_capture, project, shots, mode, target)
+    """Capture des plans par le moteur, en tâche de fond (Unity : package NapShot ; Unreal : séquence générée
+    ou existante + Movie Render Queue). Les vidéos arrivent dans la médiathèque. Sans user_requested, la règle
+    capture.engine_auto s'applique : par défaut, automatique pour Unreal et le build Unity, accord requis pour
+    l'éditeur Unity ouvert."""
+    specs = [s.model_dump() for s in procedural] if procedural else None
+    return await _run(app().engine_capture, project, shots, mode, target, specs, scene, user_requested)
 
 
 @mcp.tool(annotations=READ)

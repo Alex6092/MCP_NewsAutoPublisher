@@ -146,54 +146,76 @@ Chaque mode se configure une fois. Termine en demandant à Claude **« connecte 
 
 ### 5. Facultatif : captures pilotées par le moteur
 
-Claude peut capturer lui-même des plans propres de tes jeux. C'est mieux qu'un enregistrement
-d'écran : rendu à temps fixe, résolution verticale exacte, sans interface.
+Claude capture lui-même des plans propres de tes jeux : rendu à temps fixe, résolution verticale
+exacte, sans interface. **Aucun plan n'est à placer à la main.** Claude choisit les objets à montrer
+d'après ce qui vient d'être développé, puis demande un mouvement de caméra :
 
-**Unity (Exode)**
+- orbite ;
+- travelling avant ;
+- recul ;
+- survol ;
+- plan fixe ;
+- suivi d'un personnage (Unity uniquement).
 
-1. Dans Unity : *Window > Package Manager > + > Add package from git URL…*
+Le trajet est calculé à partir de la taille de l'objet.
 
-   ```
-   https://github.com/Alex6092/MCP_NewsAutoPublisher.git?path=/engines/unity/com.newsautopublisher.capture
-   ```
+**Préparation, une seule fois** : demande à Claude « prépare Exode (ou le projet du plugin) pour les
+captures » (outil `engine_setup`).
 
-2. Dans une scène :
-   1. Clic droit dans la hiérarchie : *NewsAutoPublisher > Nap Shot*.
-   2. Cadre la vue Scène et clique **« Ajouter un point depuis la vue Scène »** pour chaque point du
-      trajet de la caméra.
-   3. Donne au plan un `shotName`, une `description` et une `duration`.
-3. Dans `config.yaml`, section `unity` du projet, choisis la cible :
-   - `target: editor` : l'éditeur déjà ouvert passe en mode Play, capture, puis rouvre ta scène.
-   - `target: build` : lance ton exécutable (`build_exe`) avec `-napRequest`. La scène doit être
-     dans les Build Settings.
-4. Si le jeu a besoin d'un serveur ou d'une connexion pour afficher le monde, branche un démarrage
-   hors ligne avec `NapCapture.PrepareWorld`. Voir le README du package dans
-   `engines/unity/com.newsautopublisher.capture/`.
+- Unity : il ajoute le package de capture au `Packages/manifest.json` et vérifie que les scènes sont
+  en texte (« Force Text »).
+- Unreal : il active dans le `.uproject` les plugins Python Editor Script, Sequencer Scripting,
+  Editor Scripting Utilities et Movie Render Queue. Redémarre l'éditeur ensuite.
 
-Claude liste les plans avec `list_engine_shots`, en lisant les fichiers `.unity` (sérialisation
-« Force Text »). `engine_capture` les capture en arrière-plan, puis les vidéos arrivent dans la
-médiathèque.
+Puis renseigne dans `config.yaml` :
 
-**Unreal (plugins)**
+- Unity :
+  - `unity.build_exe` : le chemin de ton build, pour les captures automatiques sans toucher à ton éditeur ;
+  - `capture.window_title` si besoin.
+- Unreal :
+  - `unreal.editor_cmd` (chemin de `UnrealEditor-Cmd.exe`) ;
+  - `unreal.uproject` ;
+  - `unreal.default_map`.
 
-1. Ouvre une Level Sequence par démonstration, par exemple une quête créée dans le graphe puis
-   jouée en jeu.
-2. Crée **une fois** un preset Movie Render Queue :
-   1. *Window > Cinematics > Movie Render Queue*, ajoute une séquence, puis ouvre *Settings*.
-   2. Choisis une sortie **PNG ou JPG**, la résolution voulue (1080×1920 pour du vertical) et le
-      dossier de sortie (par défaut `Saved/MovieRenders`).
-   3. *Save as Preset*, par exemple `/Game/NewsAutoPublisher/NAP_Vertical`.
-3. Dans `config.yaml`, section `unreal` du projet, renseigne :
-   - `editor_cmd` : chemin de `UnrealEditor-Cmd.exe` ;
-   - `uproject` ;
-   - `preset` ;
-   - les plans : nom → `map` + `sequence`.
+**Quand Claude capture-t-il sans te demander ?** Règle `capture.engine_auto` du projet :
 
-Le rendu se fait en ligne de commande (`-game -LevelSequence=… -MoviePipelineConfig=…`), dans un
-processus séparé : ton éditeur peut rester ouvert. Compte quelques minutes par plan.
+| Valeur | Rendu Unreal | Build Unity | Éditeur Unity ouvert |
+|---|---|---|---|
+| `background` (défaut) | automatique | automatique | il te demande d'abord |
+| `always` | automatique | automatique | automatique (mode Play) |
+| `never` | il te demande | il te demande | il te demande |
 
-Les démonstrations dans l'éditeur (graphes, panneaux) restent mieux servies par
-`capture_screenshot` et `start_recording` sur la fenêtre « Unreal Editor ».
+Si le build Unity est plus ancien que ton dernier commit, Claude te le signale : les nouveautés
+pourraient ne pas être à l'image.
+
+**Unity (Exode) : comment ça marche**
+
+- Claude lit les noms d'objets directement dans les fichiers `.unity` (`list_engine_targets`).
+- Il envoie au package un plan procédural, par exemple « orbite autour de `QuestBoard` ». Le
+  package capture :
+  - depuis ton éditeur ouvert, qui passe en mode Play puis rouvre ta scène ;
+  - ou depuis ton build, lancé avec `-napRequest`. La scène doit alors être dans les Build Settings.
+- Si le monde d'Exode a besoin d'un serveur ou d'une connexion, branche un démarrage hors ligne via
+  `NapCapture.PrepareWorld`. Voir le README du package dans `engines/unity/com.newsautopublisher.capture/`.
+- Tu peux toujours ajouter des plans faits main pour les vues soignées : clic droit *NewsAutoPublisher
+  > Nap Shot*, puis « Ajouter un point depuis la vue Scène ».
+
+**Unreal (plugins) : comment ça marche**
+
+- Claude lance `UnrealEditor-Cmd.exe` avec un script Python (`-ExecutePythonScript`), dans un
+  processus séparé : ton éditeur peut rester ouvert. Le script :
+  1. charge la map et trouve l'acteur ;
+  2. génère une Level Sequence (CineCamera verticale, trajectoire, coupe caméra) dans
+     `/Game/NewsAutoPublisher/Auto` ;
+  3. configure Movie Render Queue sans preset (1080×1920, PNG) ;
+  4. rend la séquence et referme Unreal.
+- `list_engine_targets` liste les acteurs d'une map de la même façon.
+- Les Level Sequences faites à main se déclarent dans `unreal.shots`.
+- `render_mode: cli` utilise l'ancien rendu `-game -LevelSequence -MoviePipelineConfig`, avec un
+  preset. C'est la solution de repli si le mode Python pose problème sur ta version.
+- Compte 3 à 20 minutes par rendu, démarrage d'Unreal compris.
+- Les démonstrations dans l'éditeur (graphes, panneaux) restent mieux servies par
+  `capture_screenshot` et `start_recording` sur la fenêtre « Unreal Editor ».
 
 ## Utilisation
 
@@ -202,8 +224,9 @@ Les démonstrations dans l'éditeur (graphes, panneaux) restent mieux servies pa
 - **Captures** : jeu ou éditeur ouvert, Claude peut faire une capture d'écran, enregistrer une
   séquence pendant que tu joues (« enregistre 20 s ») ou sauvegarder le replay OBS.
   - Tu peux aussi lui donner des fichiers : clips ShadowPlay, rendus Unity Recorder ou Movie Render Queue.
-- **Plans moteur** : « fais un devlog avec le plan hub_flyover ». Claude capture le NapShot Unity
-  ou rend la séquence Unreal, puis monte le short avec.
+- **Plans moteur** : rien à demander. Pour un devlog sur une nouveauté, Claude filme lui-même les
+  objets concernés (orbite, survol…) quand ta règle le permet. Sinon, il te propose la capture. Tu
+  peux aussi la demander : « fais un devlog avec un survol du hub ».
 - **Ta voix** : « je veux enregistrer la voix moi-même ».
   1. Claude te donne le script numéroté et l'emplacement où déposer le fichier.
   2. Après l'enregistrement : « j'ai enregistré la voix » → nettoyage, normalisation, sous-titres
@@ -265,6 +288,11 @@ Variables utiles :
 4. ✅ Captures pilotées par les moteurs :
    - Unity : package NapShot, depuis l'éditeur ou un build ;
    - Unreal : Movie Render Queue en ligne de commande.
+5. ✅ Automatisation des captures :
+   - plans procéduraux autour d'objets ou d'acteurs, sans placement manuel ;
+   - séquences Unreal générées par script ;
+   - préparation des projets (`engine_setup`) ;
+   - règle de déclenchement automatique.
 
 Pistes suivantes :
 

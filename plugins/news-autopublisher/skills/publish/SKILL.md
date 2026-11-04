@@ -66,3 +66,22 @@ Ne republie jamais un canal déjà `published`. L'outil l'empêche aussi.
 
 Ne modifie jamais toi-même `monthly_budget_usd` ni `audited` dans config.yaml : ce sont des
 décisions de l'utilisateur.
+
+## Captures moteur en attente d'accord
+
+Le producteur peut avoir proposé une capture refusée par la règle automatique, typiquement dans
+l'éditeur Unity ouvert. Si l'utilisateur accepte :
+
+1. `engine_capture(..., user_requested=true)` avec les plans proposés ;
+2. `engine_capture_status(job_id, wait_seconds=300)` ;
+3. reprends le storyboard avec les nouveaux médias et appelle `render_short`, puis `render_preview`.
+
+## Préparer un projet pour les captures
+
+`engine_setup(project)` fait le diagnostic. `engine_setup(project, apply=true)` applique les
+changements, uniquement à la demande de l'utilisateur :
+
+- Unity : ajout du package de capture ;
+- Unreal : activation des plugins Python, Sequencer Scripting, Editor Scripting et Movie Render Queue.
+
+Un redémarrage de l'éditeur concerné peut être nécessaire.

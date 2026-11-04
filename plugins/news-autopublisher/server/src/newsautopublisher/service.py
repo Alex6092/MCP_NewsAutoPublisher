@@ -36,7 +36,7 @@ from .models import (
     YouTubePost,
     utcnow,
 )
-from .paths import Paths
+from .paths import Paths, package_file
 from .preview import write_preview
 from .publishers import discord_bot, x_api, youtube_api
 from .publishers.discord import publish_discord
@@ -48,6 +48,7 @@ from .store import Store
 from .validate import has_errors, validate_draft
 from .engines import unity as unity_engine
 from .engines import unreal as unreal_engine
+from .engines import setup as engine_setup_mod
 from .engines.jobs import EngineJob, JobManager
 from .ffmpeg import run as run_ffmpeg
 from .video.render import Brand, Renderer, RenderSettings
@@ -471,58 +472,170 @@ class App:
             }
         raise UserError(f"Moteur « {p.engine} » sans capture automatique (unity ou unreal).")
 
+    def list_engine_targets(self, project: str, scene: str | None = None, contains: str | None = None,
+                            limit: int = 150) -> dict[str, Any]:
+        p = self.cfg.project(project)
+        if p.engine == "unity":
+            root = self._unity_root(p)
+            try:
+                objects = unity_engine.scan_objects(root, scene, contains, limit)
+            except FileNotFoundError as exc:
+                raise UserError(str(exc)) from exc
+            return {"engine": "unity", "objects": objects, "build_scenes": unity_engine.build_scenes(root),
+                    "hint": "Utilise ces noms comme « target » de plans procéduraux (engine_capture)."}
+        if p.engine == "unreal":
+            rc = self._unreal_ready(p)
+            map_path = scene or rc.default_map or next((s.map for s in rc.shots.values()), None)
+            if not map_path:
+                raise UserError("Précise la map (scene=/Game/Maps/…) ou unreal.default_map.")
+            list_id = f"lst{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            job = EngineJob(list_id, project, "unreal", "python", "list", [],
+                            str(self.paths.media_dir(project) / "engine" / list_id))
+            req = {"mode": "list_actors", "map": map_path, "contains": contains, "limit": 3000}
+            try:
+                self.jobs.submit(job, lambda j: self._run_unreal_python(j, rc, req, None))
+            except RuntimeError as exc:
+                raise UserError(str(exc)) from exc
+            return {**job.summary(), "next": "Unreal démarre (1 à 3 min) : engine_capture_status(job_id, "
+                                              "wait_seconds=300) renverra la liste dans data.actors."}
+        raise UserError(f"Moteur « {p.engine} » sans capture automatique.")
+
+    def engine_setup(self, project: str, apply: bool = False) -> dict[str, Any]:
+        p = self.cfg.project(project)
+        if p.engine == "unity":
+            return {"engine": "unity", **engine_setup_mod.unity_setup(self._unity_root(p), apply)}
+        if p.engine == "unreal":
+            rc = p.unreal or UnrealConfig()
+            if not rc.uproject:
+                raise UserError("Renseigne unreal.uproject (et unreal.editor_cmd) dans config.yaml.")
+            return {"engine": "unreal", **engine_setup_mod.unreal_setup(Path(rc.uproject).expanduser(),
+                                                                         rc.editor_cmd, apply)}
+        raise UserError(f"Moteur « {p.engine} » non pris en charge.")
+
+    def _unreal_ready(self, p: ProjectConfig) -> UnrealConfig:
+        rc = p.unreal
+        if not rc:
+            raise UserError("Section unreal absente du projet dans config.yaml.")
+        for path, label in ((rc.editor_cmd, "unreal.editor_cmd"), (rc.uproject, "unreal.uproject")):
+            if not path or not Path(path).exists():
+                raise UserError(f"{label} introuvable : {path}")
+        return rc
+
+    def _policy_refusal(self, p: ProjectConfig, editor: bool) -> str | None:
+        policy = p.capture.engine_auto
+        if policy == "never":
+            return ("Captures automatiques désactivées (capture.engine_auto: never) : demande l'accord de "
+                    "l'utilisateur, puis relance avec user_requested=true.")
+        if editor and policy == "background":
+            return ("Cette capture ferait passer l'éditeur Unity ouvert en mode Play : demande d'abord l'accord "
+                    "de l'utilisateur, puis relance avec user_requested=true (ou configure unity.build_exe pour "
+                    "des captures automatiques sans toucher à l'éditeur).")
+        return None
+
     def engine_capture(self, project: str, shots: list[str] | None = None, mode: str = "video",
-                       target: str | None = None) -> dict[str, Any]:
+                       target: str | None = None, procedural: list[dict] | None = None, scene: str | None = None,
+                       user_requested: bool = False) -> dict[str, Any]:
         p = self.cfg.project(project)
         job_id = f"cap{datetime.now().strftime('%Y%m%d%H%M%S')}"
         out_dir = self.paths.media_dir(project) / "engine" / job_id
         ff, _ = self._ffmpeg()
+        procedural = list(procedural or [])
+        names = [s["name"] for s in procedural]
+        if len(set(names)) != len(names):
+            raise UserError("Chaque plan procédural doit avoir un nom unique.")
 
         if p.engine == "unity":
             uc = p.unity or UnityConfig()
             root = self._unity_root(p)
-            available = unity_engine.scan_shots(root)
-            wanted = shots or [s["name"] for s in available]
+            try:
+                available = unity_engine.scan_shots(root)
+            except ValueError:
+                if not (procedural and scene):
+                    raise
+                available = []
+            except FileNotFoundError as exc:
+                raise UserError(str(exc)) from exc
+            wanted = shots if shots is not None else ([] if procedural else [s["name"] for s in available])
             missing = [n for n in wanted if n not in {s["name"] for s in available}]
             if missing:
                 raise UserError(f"Plans introuvables dans les scènes : {', '.join(missing)}.")
-            if not wanted:
-                raise UserError("Aucun NapShot dans le projet.")
-            tgt = target or uc.target
-            note = ""
-            if tgt == "editor" and not unity_engine.editor_is_open(root):
-                if uc.build_exe and Path(uc.build_exe).expanduser().exists():
-                    tgt, note = "build", "Éditeur Unity fermé : capture via le build."
-                else:
-                    raise UserError("L'éditeur Unity n'a pas ce projet ouvert et aucun build_exe n'est configuré.")
-            if tgt == "build" and not (uc.build_exe and Path(uc.build_exe).expanduser().exists()):
-                raise UserError(f"Build Unity introuvable : {uc.build_exe} (unity.build_exe).")
-            by_scene: dict[str, list[str]] = {}
+            if not wanted and not procedural:
+                raise UserError("Rien à capturer : aucun NapShot dans le projet et aucun plan procédural demandé.")
+
+            groups: dict[str, dict[str, list]] = {}
             for s in available:
                 if s["name"] in wanted:
-                    by_scene.setdefault(s["scene"], []).append(s["name"])
+                    groups.setdefault(s["scene"], {"shots": [], "procedural": []})["shots"].append(s["name"])
+            for spec in procedural:
+                sc = scene or unity_engine.scene_for_target(root, spec["target"])
+                if not sc:
+                    raise UserError(f"Objet « {spec['target']} » introuvable dans les scènes : vérifie le nom "
+                                    "(list_engine_targets) ou précise scene.")
+                groups.setdefault(sc, {"shots": [], "procedural": []})["procedural"].append(spec)
+
+            build_ok = bool(uc.build_exe and Path(uc.build_exe).expanduser().exists())
+            tgt = target or uc.target
+            notes = []
+            if not user_requested:
+                refusal = self._policy_refusal(p, editor=(tgt == "editor"))
+                if refusal and tgt == "editor" and build_ok and p.capture.engine_auto == "background":
+                    tgt, refusal = "build", None
+                    notes.append("Capture automatique via le build, sans toucher à ton éditeur.")
+                if refusal:
+                    raise UserError(refusal)
+            if tgt == "editor" and not unity_engine.editor_is_open(root):
+                if build_ok:
+                    tgt = "build"
+                    notes.append("Éditeur Unity fermé : capture via le build.")
+                else:
+                    raise UserError("L'éditeur Unity n'a pas ce projet ouvert et aucun build_exe n'est configuré.")
+            if tgt == "build":
+                if not build_ok:
+                    raise UserError(f"Build Unity introuvable : {uc.build_exe} (unity.build_exe).")
+                stale = self._build_staleness(Path(uc.build_exe).expanduser(), p.repo_path)
+                if stale:
+                    notes.append(stale)
             descriptions = {s["name"]: s["description"] for s in available}
-            job = EngineJob(job_id, project, "unity", tgt, mode, wanted, str(out_dir), message=note)
-            work = lambda j: self._run_unity(j, p, uc, root, by_scene, descriptions, ff)  # noqa: E731
+            descriptions.update({s["name"]: f"{s.get('move', 'orbit')} autour de {s['target']}" for s in procedural})
+            job = EngineJob(job_id, project, "unity", tgt, mode, wanted + names, str(out_dir), message=" ".join(notes))
+            work = lambda j: self._run_unity(j, uc, root, groups, descriptions, ff)  # noqa: E731
+
         elif p.engine == "unreal":
-            rc = p.unreal
-            if not rc or not rc.shots:
-                raise UserError("Aucun plan Unreal configuré (unreal.shots).")
+            rc = self._unreal_ready(p)
             if mode != "video":
-                raise UserError("Unreal : seul le mode vidéo (Movie Render Queue) est pris en charge ; "
-                                "pour des captures de l'éditeur, utilise capture_screenshot.")
-            for path, label in ((rc.editor_cmd, "unreal.editor_cmd"), (rc.uproject, "unreal.uproject")):
-                if not path or not Path(path).exists():
-                    raise UserError(f"{label} introuvable : {path}")
-            wanted = shots or list(rc.shots)
+                raise UserError("Unreal : seul le mode vidéo est pris en charge ; pour l'éditeur lui-même, "
+                                "utilise capture_screenshot / start_recording sur sa fenêtre.")
+            if not user_requested:
+                refusal = self._policy_refusal(p, editor=False)
+                if refusal:
+                    raise UserError(refusal)
+            wanted = shots if shots is not None else ([] if procedural else list(rc.shots))
             missing = [n for n in wanted if n not in rc.shots]
             if missing:
-                raise UserError(f"Plans Unreal inconnus : {', '.join(missing)} (connus : {', '.join(rc.shots)}).")
-            if not rc.preset and any(not rc.shots[n].preset for n in wanted):
-                raise UserError("Preset Movie Render Queue manquant (unreal.preset) : crée-le une fois dans "
-                                "l'éditeur (Movie Render Queue > Save as Preset).")
-            job = EngineJob(job_id, project, "unreal", "mrq", mode, wanted, str(out_dir))
-            work = lambda j: self._run_unreal(j, rc, ff)  # noqa: E731
+                raise UserError(f"Plans Unreal inconnus : {', '.join(missing)} (connus : {', '.join(rc.shots) or 'aucun'}).")
+            if not wanted and not procedural:
+                raise UserError("Rien à rendre : aucun plan configuré (unreal.shots) ni procédural demandé.")
+            if rc.render_mode == "cli":
+                if procedural:
+                    raise UserError("Les plans procéduraux demandent render_mode: python (mode par défaut).")
+                if not rc.preset and any(not rc.shots[n].preset for n in wanted):
+                    raise UserError("Preset Movie Render Queue manquant (unreal.preset) : nécessaire en "
+                                    "render_mode: cli (le mode python n'en a pas besoin).")
+                job = EngineJob(job_id, project, "unreal", "cli", mode, wanted, str(out_dir))
+                work = lambda j: self._run_unreal(j, rc, ff)  # noqa: E731
+            else:
+                default_map = scene or rc.default_map or next((s.map for s in rc.shots.values()), None)
+                if procedural and not default_map:
+                    raise UserError("Précise la map des plans procéduraux (scene=/Game/Maps/…) ou unreal.default_map.")
+                specs = [{"name": n, "sequence": rc.shots[n].sequence, "map": rc.shots[n].map} for n in wanted]
+                specs += [{**spec, "map": spec.get("map") or default_map} for spec in procedural]
+                req = {"mode": "render", "map": default_map, "shots": specs}
+                fps = {n: rc.shots[n].fps for n in wanted}
+                descriptions = {n: rc.shots[n].description for n in wanted}
+                descriptions.update({s["name"]: f"{s.get('move', 'orbit')} autour de {s['target']}" for s in procedural})
+                job = EngineJob(job_id, project, "unreal", "python", mode, wanted + names, str(out_dir),
+                                message="Démarrage d'Unreal (1 à 3 min) puis génération / rendu des plans…")
+                work = lambda j: self._run_unreal_python(j, rc, req, (fps, descriptions, ff))  # noqa: E731
         else:
             raise UserError(f"Moteur « {p.engine} » sans capture automatique.")
 
@@ -532,6 +645,23 @@ class App:
             raise UserError(str(exc)) from exc
         return {**job.summary(), "next": "Suis l'avancement avec engine_capture_status(job_id, wait_seconds=…)."}
 
+    def _build_staleness(self, exe: Path, repo: str | None) -> str | None:
+        if not repo:
+            return None
+        try:
+            out = subprocess.run(["git", "-C", str(Path(repo).expanduser()), "log", "-1", "--format=%ct"],
+                                 capture_output=True, text=True, timeout=20).stdout.strip()
+            last = int(out)
+        except (ValueError, OSError, subprocess.SubprocessError):
+            return None
+        built = exe.stat().st_mtime
+        if built + 60 < last:
+            fmt = "%d/%m %H:%M"
+            return (f"Attention : build du {datetime.fromtimestamp(built).strftime(fmt)}, plus ancien que le "
+                    f"dernier commit ({datetime.fromtimestamp(last).strftime(fmt)}) : les nouveautés récentes "
+                    "peuvent manquer à l'image.")
+        return None
+
     def engine_capture_status(self, job_id: str, wait_seconds: float = 0) -> dict[str, Any]:
         job = self.jobs.get(job_id, self.paths.media)
         if not job:
@@ -540,25 +670,44 @@ class App:
             self.jobs.wait(job, wait_seconds)
         return job.summary()
 
+    def _frames_to_media(self, job: EngineJob, name: str, frames: list[Path], fps: int, source: str,
+                         note: str, keep: bool, work: Path) -> None:
+        target = self._media_path(job.project, f"{job.engine}-{_safe(name)}", ".mp4")
+        tmp = work / f"{_safe(name)}_seq"
+        tmp.mkdir(parents=True, exist_ok=True)
+        ext = frames[0].suffix.lower()
+        for i, f in enumerate(frames, 1):
+            shutil.copyfile(f, tmp / f"frame_{i:05d}{ext}")
+        _assemble(self._ffmpeg()[0], tmp / f"frame_%05d{ext}", fps, target)
+        shutil.rmtree(tmp, ignore_errors=True)
+        if not keep:
+            for f in frames:
+                f.unlink(missing_ok=True)
+        job.media.append(self._register(job.project, target, source, note))
+
     # --- Unity
-    def _run_unity(self, job: EngineJob, p: ProjectConfig, uc: UnityConfig, root: Path,
-                   by_scene: dict[str, list[str]], descriptions: dict[str, str], ff: str) -> None:
+    def _run_unity(self, job: EngineJob, uc: UnityConfig, root: Path, groups: dict[str, dict[str, list]],
+                   descriptions: dict[str, str], ff: str) -> None:
         out = Path(job.out_dir)
-        for index, (scene, names) in enumerate(by_scene.items()):
+        for index, (scene, group) in enumerate(groups.items()):
             sub = out / f"part{index + 1}"
-            req = unity_engine.build_request(f"{job.id}-{index + 1}", sub, names, scene, job.mode, uc.width,
-                                             uc.height, uc.fps, uc.format, uc.warmup_seconds, uc.msaa,
-                                             uc.include_ui)
-            job.update(message=f"Capture de {', '.join(names)} ({scene}) via {job.target}…")
+            req = unity_engine.build_request(f"{job.id}-{index + 1}", sub, group["shots"], group["procedural"],
+                                             scene, job.mode, uc.width, uc.height, uc.fps, uc.format,
+                                             uc.warmup_seconds, uc.msaa, uc.include_ui)
+            label = ", ".join(group["shots"] + [s["name"] for s in group["procedural"]])
+            job.update(message=f"Capture de {label} ({scene}) via {job.target}…")
             if job.target == "editor":
                 result = self._unity_editor_request(job, root, req, sub, uc.timeout_seconds)
             else:
                 result = self._unity_build_request(job, uc, req, sub)
+            for w in result.get("warnings") or []:
+                job.message += f" {w}"
             if result.get("status") != "done":
                 raise RuntimeError(f"Unity : {result.get('error') or 'capture échouée'}")
             job.update("assembling", "Assemblage des images…")
             for shot in result.get("shots", []):
-                note = f"unity:{shot['name']}" + (f" — {descriptions.get(shot['name'])}" if descriptions.get(shot["name"]) else "")
+                desc = descriptions.get(shot["name"])
+                note = f"unity:{shot['name']}" + (f" — {desc}" if desc else "")
                 if job.mode == "screenshot":
                     for f in shot.get("files", []):
                         job.media.append(self._register(job.project, Path(f), "unity:screenshot", note))
@@ -567,13 +716,13 @@ class App:
                 frames = sorted(folder.glob(f"frame_*.{uc.format}"))
                 if not frames:
                     raise RuntimeError(f"Aucune image produite pour le plan {shot['name']}.")
-                video = self._media_path(job.project, f"unity-{_safe(shot['name'])}", ".mp4")
-                _assemble(ff, folder / f"frame_%05d.{uc.format}", shot.get("fps") or uc.fps, video)
-                job.media.append(self._register(job.project, video, "unity:video", note))
+                self._frames_to_media(job, shot["name"], frames, shot.get("fps") or uc.fps, "unity:video",
+                                      note, uc.keep_frames, out)
                 if not uc.keep_frames:
                     shutil.rmtree(folder, ignore_errors=True)
             job.save()
-        job.update("done", f"{len(job.media)} média(s) ajouté(s) à la médiathèque.")
+        job.update("done", (job.message + " " if job.message else "")
+                   + f"{len(job.media)} média(s) ajouté(s) à la médiathèque.")
 
     def _unity_editor_request(self, job: EngineJob, root: Path, req: dict, sub: Path, timeout: float) -> dict:
         request_path = unity_engine.request_file(root)
@@ -659,6 +808,69 @@ class App:
                                    f"(code {proc.returncode}). Fin du journal :\n{tail}")
             job.media.append(self._register(job.project, target, "unreal:mrq", note))
             job.update("running")
+        job.update("done", f"{len(job.media)} vidéo(s) ajoutée(s) à la médiathèque.")
+
+    def _run_unreal_python(self, job: EngineJob, rc: UnrealConfig, req: dict, render: tuple | None) -> None:
+        """Lance Unreal Editor avec nap_unreal.py (liste d'acteurs ou génération + rendu MRQ)."""
+        out = Path(job.out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        uproject = Path(rc.uproject)
+        script_dir = uproject.parent / "Saved" / "NewsAutoPublisher"
+        script_dir.mkdir(parents=True, exist_ok=True)
+        script = script_dir / "nap_unreal.py"
+        shutil.copyfile(package_file("engines", "nap_unreal.py"), script)
+        frames_root = out / "frames"
+        request = {
+            "id": job.id, "result": str((out / "result.json").resolve()), "output_dir": str(frames_root.resolve()),
+            "width": rc.width, "height": rc.height, "fps": rc.fps, "format": rc.format, "preset": rc.preset,
+            "asset_dir": rc.asset_dir, **req,
+        }
+        req_path = out / "unreal_request.json"
+        unity_engine.write_json(req_path, request)
+        (out / "result.json").unlink(missing_ok=True)
+        log = out / "unreal.log"
+        job.log = str(log)
+        cmd = [rc.editor_cmd, str(uproject), f"-ExecutePythonScript={_no_space_path(script)}", "-unattended",
+               "-nosplash", "-log", *rc.extra_args]
+        env = {**os.environ, "NAP_UNREAL_REQUEST": str(req_path.resolve())}
+        with log.open("w", encoding="utf-8", errors="replace") as fh:
+            proc = subprocess.Popen(cmd, stdout=fh, stderr=subprocess.STDOUT, env=env,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            try:
+                proc.wait(timeout=rc.timeout_seconds)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                raise RuntimeError(f"Unreal n'a pas terminé en {rc.timeout_seconds:.0f} s (journal : {log}).")
+        result = unity_engine.read_result(out)
+        if not result:
+            tail = log.read_text(encoding="utf-8", errors="replace")[-1500:] if log.exists() else ""
+            raise RuntimeError("Unreal s'est fermé sans résultat : plugins Python / Sequencer Scripting / Movie "
+                               f"Render Queue activés (engine_setup) ? Fin du journal :\n{tail}")
+        if result.get("status") != "done":
+            raise RuntimeError(f"Unreal : {result.get('error') or 'échec'} — {' | '.join(result.get('log', [])[-5:])}")
+        if render is None:  # liste d'acteurs
+            actors = result.get("actors", [])
+            needle = (req.get("contains") or "").lower()
+            job.data = {"map": req.get("map"),
+                        "actors": [a for a in actors if not needle or needle in a["label"].lower()][:500]}
+            job.update("done", f"{len(actors)} acteur(s) dans {req.get('map')}.")
+            return
+        fps_by_shot, descriptions, _ff = render
+        job.update("assembling", "Assemblage des images…")
+        for shot in result.get("shots", []):
+            frames, video_file = unreal_engine.collect_output(Path(shot["folder"]), since=0)
+            desc = descriptions.get(shot["name"])
+            note = f"unreal:{shot['name']}" + (f" — {desc}" if desc else "")
+            if frames:
+                self._frames_to_media(job, shot["name"], frames, fps_by_shot.get(shot["name"], rc.fps),
+                                      "unreal:mrq", note, rc.keep_frames, out)
+            elif video_file:
+                target = self._media_path(job.project, f"unreal-{_safe(shot['name'])}", video_file.suffix)
+                shutil.copyfile(video_file, target)
+                job.media.append(self._register(job.project, target, "unreal:mrq", note))
+            else:
+                raise RuntimeError(f"Aucune image rendue pour « {shot['name']} » (journal : {log}).")
+            job.save()
         job.update("done", f"{len(job.media)} vidéo(s) ajoutée(s) à la médiathèque.")
 
     def probe_media(self, path: str) -> dict[str, Any]:
@@ -980,3 +1192,16 @@ def _assemble(ffmpeg: str, pattern: Path, fps: int, out: Path) -> None:
     run_ffmpeg([ffmpeg, "-y", "-hide_banner", "-loglevel", "error", "-framerate", str(fps), "-i", str(pattern),
                 "-vf", "pad=ceil(iw/2)*2:ceil(ih/2)*2,format=yuv420p", "-c:v", "libx264", "-preset", "medium",
                 "-crf", "16", "-movflags", "+faststart", str(out)])
+
+
+def _no_space_path(path: Path) -> str:
+    """Chemin sans espace pour la ligne de commande d'Unreal (nom court 8.3 sous Windows)."""
+    p = str(path.resolve())
+    if " " not in p or sys.platform != "win32":
+        return p.replace("\\", "/")
+    import ctypes
+
+    buf = ctypes.create_unicode_buffer(1024)
+    if ctypes.windll.kernel32.GetShortPathNameW(p, buf, 1024):  # type: ignore[attr-defined]
+        return buf.value.replace("\\", "/")
+    return p.replace("\\", "/")

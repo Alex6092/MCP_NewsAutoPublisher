@@ -23,6 +23,8 @@ projects:
       backend: auto                    # auto | obs | gdigrab | ddagrab
       window_title: Exode              # sous-chaîne du titre de la fenêtre (jeu ou éditeur Unity)
       obs_scene: Exode                 # scène OBS à activer avant capture (facultatif)
+      engine_auto: background          # captures moteur sans demander : never | background | always
+                                       # background = rendu Unreal et build Unity oui, éditeur Unity ouvert non
     brand:
       color: "#7C5CFF"
       accent: "#FFD166"
@@ -58,11 +60,13 @@ projects:
     hashtags: ["#UnrealEngine", "#UE5", "#gamedev"]
     capture:
       window_title: Unreal Editor
-    unreal:                            # rendu de Level Sequences par Movie Render Queue (voir README)
-      editor_cmd: C:/Program Files/Epic Games/UE_5.4/Engine/Binaries/Win64/UnrealEditor-Cmd.exe
+    unreal:                            # rendu par Movie Render Queue (voir README)
+      editor_cmd: C:/Program Files/Epic Games/UE_5.5/Engine/Binaries/Win64/UnrealEditor-Cmd.exe
       uproject: D:/Dev/UE/DQM_Demo/DQM_Demo.uproject
-      preset: /Game/NewsAutoPublisher/NAP_Vertical   # preset MRQ créé une fois dans l'éditeur
-      shots:
+      default_map: /Game/Maps/Demo     # map des plans générés automatiquement autour d'acteurs
+      # render_mode: python            # python (défaut, sans preset) | cli (preset obligatoire)
+      # preset: /Game/NewsAutoPublisher/NAP_Vertical
+      shots:                           # facultatif : séquences faites à la main
         quest_graph_demo:
           map: /Game/Maps/Demo
           sequence: /Game/Cinematics/QuestDemo
