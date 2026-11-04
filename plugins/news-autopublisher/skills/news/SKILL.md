@@ -42,7 +42,12 @@ de traduction littérale.
   1 ou 2 hashtags, lien dans `url`.
 - **YouTube** : titre ≤ 100 caractères avec `#Shorts`, description avec les liens et 3 à 5 hashtags.
 
-Crée le brouillon avec `create_draft` puis lis `issues`. Corrige toutes les erreurs avec
+Crée le brouillon avec `create_draft` puis lis `issues`. Pour un projet bilingue :
+
+1. crée la première langue ;
+2. crée chaque autre langue avec `group=<id du premier brouillon>`.
+
+L'utilisateur relit et valide alors toute la nouveauté en une seule fois. Corrige toutes les erreurs avec
 `update_draft`. Corrige aussi les avertissements pertinents.
 
 ## 4. Short vertical (20 à 45 s)
@@ -94,7 +99,7 @@ Suis `references/short-recipes.md`. En résumé :
 
 ## 5. Rendre la main
 
-1. `render_preview(draft_id)` : ouvre la page de prévisualisation.
+1. `render_preview(draft_id)` : ouvre une seule page, toutes langues confondues.
 2. Réponds avec un rapport court :
    - id du ou des brouillons ;
    - sujet et angle retenus ;

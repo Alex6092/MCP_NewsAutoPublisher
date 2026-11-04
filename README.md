@@ -86,7 +86,18 @@ Tu peux aussi définir `MCP_TIMEOUT=120000` dans ton environnement.
 
 ### 3. Configurer
 
-Demande à Claude : **« initialise la config NewsAutoPublisher »** (outil `init_config`). Cela crée
+Le plus simple : **`/news-autopublisher:setup`**, ou « configure NewsAutoPublisher ». L'assistant :
+
+- détecte tes dépôts (Unity, Unreal, remote GitHub/GitLab, CHANGELOG) ;
+- te propose une configuration pré-remplie pour chaque projet ;
+- t'aide à brancher tes webhooks Discord, en ouvrant `.env` pour que tu y colles les URL toi-même ;
+- prépare les moteurs ;
+- termine par un message de test sur un salon de ton choix.
+
+Les modifications de `config.yaml` conservent tes commentaires, et une configuration invalide est
+refusée.
+
+À la main, si tu préfères : demande **« initialise la config NewsAutoPublisher »** (outil `init_config`). Cela crée
 `%USERPROFILE%\.newsautopublisher\` avec :
 
 - `config.yaml` : tes projets (chemin du dépôt local, langues, ton, liens, hashtags, couleurs,
@@ -232,7 +243,16 @@ pourraient ne pas être à l'image.
   2. Après l'enregistrement : « j'ai enregistré la voix » → nettoyage, normalisation, sous-titres
      calés, montage.
 - **Valider** : relis la prévisualisation, puis « publie », ou « change le titre X par… ».
-  - Le skill `publish` approuve, publie et enregistre les liens.
+  - Pour un projet bilingue, la même page montre toutes les langues : **un seul « publie »** pour tout.
+  - X et YouTube en mode gratuit : poste, puis dis simplement **« c'est posté »**. Pas besoin de
+    recopier les URL.
+- **Suggestions automatiques** : Claude te propose une news (sans jamais la lancer seul) dans deux cas :
+  - un nouveau tag n'a pas été annoncé ;
+  - beaucoup de commits se sont accumulés depuis la dernière news (8 par défaut, au plus une fois
+    par jour).
+
+  Il te rappelle aussi les brouillons en attente au démarrage d'une session. Réponds « pas
+  maintenant » pour les mettre en pause une semaine. Réglages : section `hints` de `config.yaml`.
 
 ### Voix
 
@@ -267,8 +287,10 @@ Le dossier contient :
   - `capture/` : OBS, ffmpeg gdigrab/ddagrab.
   - `engines/` : captures Unity (protocole du package NapShot) et Unreal (Movie Render Queue).
   - `publishers/` : Discord (webhook, crosspost par bot), X (intent, API), YouTube (manuel, API).
-- `plugins/news-autopublisher/skills/` : skills `news` (préparation, exécutée dans le sous-agent)
-  et `publish` (validation et publication).
+- `plugins/news-autopublisher/skills/` : skills `news` (préparation, exécutée dans le sous-agent),
+  `publish` (validation et publication) et `setup` (assistant d'installation).
+- `plugins/news-autopublisher/hooks/hooks.json` : suggestions proactives au démarrage de session et
+  après `git tag`, `push` et `commit`. Elles sont asynchrones et ne ralentissent jamais la session.
 - `plugins/news-autopublisher/agents/news-producer.md` : le sous-agent, qui n'a pas accès aux
   outils de publication.
 - `engines/unity/com.newsautopublisher.capture/` : le package Unity (C#) à installer dans tes projets.
@@ -293,6 +315,12 @@ Variables utiles :
    - séquences Unreal générées par script ;
    - préparation des projets (`engine_setup`) ;
    - règle de déclenchement automatique.
+
+6. ✅ Moins de friction :
+   - assistant d'installation ;
+   - une seule validation par nouveauté (toutes langues) ;
+   - « c'est posté » sans URL ;
+   - suggestions proactives de news.
 
 Pistes suivantes :
 

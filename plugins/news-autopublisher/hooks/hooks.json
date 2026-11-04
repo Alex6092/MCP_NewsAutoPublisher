@@ -1,0 +1,78 @@
+{
+  "description": "NewsAutoPublisher : suggère de préparer une news quand un tag ou beaucoup de commits n'ont pas été annoncés. Ne prépare ni ne publie jamais rien sans accord.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv",
+            "args": [
+              "run",
+              "--quiet",
+              "--frozen",
+              "--project",
+              "${CLAUDE_PLUGIN_ROOT}/server",
+              "newsautopublisher-hint",
+              "session"
+            ],
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "uv",
+            "args": [
+              "run",
+              "--quiet",
+              "--frozen",
+              "--project",
+              "${CLAUDE_PLUGIN_ROOT}/server",
+              "newsautopublisher-hint",
+              "git"
+            ],
+            "async": true,
+            "if": "Bash(git tag *)"
+          },
+          {
+            "type": "command",
+            "command": "uv",
+            "args": [
+              "run",
+              "--quiet",
+              "--frozen",
+              "--project",
+              "${CLAUDE_PLUGIN_ROOT}/server",
+              "newsautopublisher-hint",
+              "git"
+            ],
+            "async": true,
+            "if": "Bash(git push *)"
+          },
+          {
+            "type": "command",
+            "command": "uv",
+            "args": [
+              "run",
+              "--quiet",
+              "--frozen",
+              "--project",
+              "${CLAUDE_PLUGIN_ROOT}/server",
+              "newsautopublisher-hint",
+              "git"
+            ],
+            "async": true,
+            "if": "Bash(git commit *)"
+          }
+        ]
+      }
+    ]
+  }
+}

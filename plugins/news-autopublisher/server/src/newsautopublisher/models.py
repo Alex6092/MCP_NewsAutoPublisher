@@ -96,6 +96,7 @@ class Draft(_Model):
     language: str
     topic: str
     status: DraftStatus = "draft"
+    group: str | None = None  # id du brouillon principal : une nouveauté = un groupe (une langue par brouillon)
     channels: list[str] = Field(default_factory=list)
     posts: DraftPosts = Field(default_factory=DraftPosts)
     short: ShortInfo = Field(default_factory=ShortInfo)

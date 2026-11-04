@@ -1,6 +1,7 @@
 import httpx
 import pytest
 import respx
+import yaml
 from conftest import git
 
 from newsautopublisher.models import DiscordPost, XPost, YouTubePost
@@ -45,7 +46,7 @@ def test_publish_requires_approval(app):
 def test_update_after_approval_requires_new_approval(app):
     d = make_draft(app, youtube=False)
     d = app.update_draft(d.id, channels=["discord.test", "x.main"])
-    assert app.approve_draft(d.id).status == "approved"
+    assert app.approve_draft(d.id)[0].status == "approved"
     d = app.update_draft(d.id, x=XPost(text="Nouveau texte"))
     assert d.status == "draft" and d.approved_at is None
 
@@ -75,14 +76,14 @@ def test_full_publication_flow(app, repo):
     assert by_channel["discord.test"]["url"] == "https://discord.com/channels/7/5/9"
     assert by_channel["x.main"]["status"] == "pending_manual"
     assert by_channel["x.main"]["url"].startswith("https://x.com/intent/post?text=")
-    assert res["status"] == "partial"
+    assert res["drafts"][0]["status"] == "partial"
 
     again = app.publish(d.id)  # idempotent : rien n'est renvoyé deux fois
     assert {r["status"] for r in again["results"]} == {"skipped"}
     assert route.call_count == 1
 
     done = app.mark_published(d.id, "x.main", "https://x.com/exode/status/1")
-    assert done["status"] == "published"
+    assert done["statuses"][d.id] == "published"
 
     head = git(repo, "rev-parse", "HEAD").strip()
     assert app.store.last_published_commit("exode") == head
@@ -107,3 +108,53 @@ def test_preview_written(app):
     out = app.render_preview(d.id, open_browser=False)
     html = open(out["preview"], encoding="utf-8").read()
     assert "Les quêtes arrivent" in html and "Short non rendu" in html and "x.com" not in html.split("<style>")[0]
+
+
+def bilingual(data_dir):
+    cfg_file = data_dir / "config.yaml"
+    cfg = yaml.safe_load(cfg_file.read_text(encoding="utf-8"))
+    cfg["projects"]["exode"]["languages"] = ["en", "fr"]
+    cfg["projects"]["exode"]["channels"] = {"en": ["discord.test", "x.main"], "fr": ["discord.test"]}
+    cfg_file.write_text(yaml.safe_dump(cfg, allow_unicode=True), encoding="utf-8")
+
+
+@respx.mock
+def test_one_validation_for_all_languages(data_dir):
+    bilingual(data_dir)
+    app = App()
+    en = app.create_draft("exode", "en", "Quests are here", discord=DiscordPost(content="Quests!"),
+                          x=XPost(text="Quests are coming to Exode", url="https://discord.gg/exode"))
+    fr = app.create_draft("exode", "fr", "Les quêtes arrivent", discord=DiscordPost(content="Les quêtes !"), group=en.id)
+    assert fr.group == en.id and en.group == en.id
+    with pytest.raises(UserError, match="déjà un brouillon en fr"):
+        app.create_draft("exode", "fr", "doublon", discord=DiscordPost(content="x"), group=fr.id)
+
+    preview = app.render_preview(fr.id, open_browser=False)  # depuis n'importe quelle langue
+    html = open(preview["preview"], encoding="utf-8").read()
+    assert preview["drafts"] == [en.id, fr.id] and "Quests are here" in html and "Les quêtes !" in html
+    assert "une seule validation" in html
+
+    assert [m.status for m in app.approve_draft(fr.id)] == ["approved", "approved"]
+    respx.post(HOOK).mock(return_value=httpx.Response(200, json={"id": "9", "channel_id": "5"}))
+    respx.get(HOOK).mock(return_value=httpx.Response(200, json={"guild_id": "7"}))
+    res = app.publish(en.id)
+    statuses = sorted((r["language"], r["channel"], r["status"]) for r in res["results"])
+    assert statuses == [("en", "discord.test", "published"), ("en", "x.main", "pending_manual"),
+                        ("fr", "discord.test", "published")]
+
+    # « c'est posté » : sans canal ni URL
+    done = app.mark_published(fr.id)
+    assert done["marked"] == [{"draft_id": en.id, "language": "en", "channel": "x.main", "url": None}]
+    assert set(done["statuses"].values()) == {"published"}
+    assert app.mark_published(en.id)["marked"] == []
+
+
+def test_update_one_language_requires_new_group_approval(data_dir):
+    bilingual(data_dir)
+    app = App()
+    en = app.create_draft("exode", "en", "A", channels=["discord.test"], discord=DiscordPost(content="A"))
+    fr = app.create_draft("exode", "fr", "B", channels=["discord.test"], discord=DiscordPost(content="B"), group=en.id)
+    app.approve_draft(en.id)
+    app.update_draft(fr.id, discord=DiscordPost(content="B2"))
+    with pytest.raises(UserError, match="non approuvé"):
+        app.publish(en.id, dry_run=True)

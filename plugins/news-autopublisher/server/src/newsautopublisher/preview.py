@@ -50,7 +50,7 @@ def _x_html(text: str) -> str:
     return out.replace("\n", "<br>")
 
 
-def build_preview(draft: Draft, cfg: AppConfig) -> str:
+def _draft_section(draft: Draft, cfg: AppConfig, multi: bool) -> str:
     proj = cfg.projects.get(draft.project)
     color = (proj.brand.color if proj else "#7C5CFF")
     channels = []
@@ -124,10 +124,37 @@ def build_preview(draft: Draft, cfg: AppConfig) -> str:
     script = (f"<section class='card'><h2>Script voix off ({html.escape(voice.engine)}, "
               f"{voice.duration:.1f} s)</h2><pre>{html.escape(voice.script)}</pre></section>") if voice else ""
 
+    title = (f"<h2 class='lang' id='{html.escape(draft.language)}'>{html.escape(draft.language.upper())} "
+             f"<span class='status'>{html.escape(draft.status)}</span> <code>{html.escape(draft.id)}</code></h2>"
+             if multi else "")
+    return f"""<section class="draft">
+{title}
+<div class="grid">
+  <section class="card"><h2>Validation</h2><ul class="issues">{issues}</ul></section>
+  <section class="card"><h2>Canaux</h2><ul>{''.join(channels) or '<li>Aucun canal configuré pour cette langue.</li>'}</ul></section>
+  {''.join(cards)}
+  {script}
+</div>
+</section>"""
+
+
+def build_preview(drafts: Draft | list[Draft], cfg: AppConfig) -> str:
+    drafts = drafts if isinstance(drafts, list) else [drafts]
+    first = drafts[0]
+    proj = cfg.projects.get(first.project)
+    color = proj.brand.color if proj else "#7C5CFF"
+    multi = len(drafts) > 1
+    langs = " · ".join(d.language.upper() for d in drafts)
+    nav = ("<nav class='langs'>" + " ".join(f"<a href='#{html.escape(d.language)}'>{html.escape(d.language.upper())}</a>"
+                                           for d in drafts) + "</nav>") if multi else ""
+    meta = (f"<span class='status'>{html.escape(first.status)}</span> &nbsp;" if not multi else "") + \
+        f"{html.escape(proj.name if proj else first.project)} · {langs}" + \
+        (f" · <code>{html.escape(first.id)}</code>" if not multi else " · une seule validation pour toutes les langues")
+    sections = "\n".join(_draft_section(d, cfg, multi) for d in drafts)
     return f"""<!doctype html>
-<html lang="{html.escape(draft.language)}"><head><meta charset="utf-8">
+<html lang="{html.escape(first.language)}"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Brouillon {html.escape(draft.id)}</title>
+<title>{html.escape(first.topic)}</title>
 <style>
 :root {{ --bg:#f4f4f7; --fg:#18181b; --muted:#6b6b76; --card:#fff; --line:#e3e3ea; }}
 @media (prefers-color-scheme: dark) {{ :root {{ --bg:#111114; --fg:#ececf1; --muted:#9a9aa6; --card:#1b1b20; --line:#2c2c34; }} }}
@@ -136,7 +163,9 @@ body {{ margin:0; font:15px/1.5 system-ui, "Segoe UI", sans-serif; background:va
 main {{ max-width:1100px; margin:0 auto; padding:24px 16px 64px; }}
 header h1 {{ margin:0 0 4px; font-size:22px }}
 .meta {{ color:var(--muted); margin:0 0 16px }}
-.status {{ display:inline-block; padding:2px 10px; border-radius:99px; background:{color}; color:#fff; font-weight:600 }}
+.status {{ display:inline-block; padding:2px 10px; border-radius:99px; background:{color}; color:#fff; font-weight:600; font-size:13px }}
+.langs a {{ display:inline-block; margin-right:8px; padding:2px 10px; border:1px solid var(--line); border-radius:99px; color:inherit; text-decoration:none }}
+h2.lang {{ margin:28px 0 12px; font-size:18px; display:flex; gap:10px; align-items:center }}
 .grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr)); gap:16px; }}
 .card {{ background:var(--card); border:1px solid var(--line); border-radius:12px; padding:16px; overflow:hidden }}
 .card h2 {{ margin:0 0 12px; font-size:16px }} .card h2 small {{ color:var(--muted); font-weight:500 }}
@@ -164,25 +193,19 @@ pre {{ white-space:pre-wrap; word-break:break-word; margin:0; font:13px/1.5 ui-m
 .yt-overlay {{ position:absolute; left:10px; right:40px; bottom:64px; color:#fff; font-size:12px; font-weight:600; text-shadow:0 1px 3px #000; pointer-events:none }}
 .yt-meta {{ flex:1; min-width:200px }} .yt-title {{ font-weight:700; margin-bottom:8px }}
 .yt-tags span {{ display:inline-block; background:rgba(127,127,127,.15); border-radius:6px; padding:1px 6px; margin:4px 4px 0 0; font-size:12px }}
-.full {{ grid-column:1/-1 }}
 </style></head>
 <body><main>
 <header>
-  <h1>{html.escape(draft.topic)}</h1>
-  <p class="meta"><span class="status">{html.escape(draft.status)}</span>
-  &nbsp;{html.escape(proj.name if proj else draft.project)} · {html.escape(draft.language.upper())} · <code>{html.escape(draft.id)}</code></p>
+  <h1>{html.escape(first.topic)}</h1>
+  <p class="meta">{meta}</p>
+  {nav}
 </header>
-<div class="grid">
-  <section class="card"><h2>Validation</h2><ul class="issues">{issues}</ul></section>
-  <section class="card"><h2>Canaux</h2><ul>{''.join(channels) or '<li>Aucun canal configuré pour cette langue.</li>'}</ul></section>
-  {''.join(cards)}
-  {script}
-</div>
+{sections}
 </main></body></html>"""
 
 
-def write_preview(draft: Draft, cfg: AppConfig, out_dir: Path) -> Path:
+def write_preview(drafts: Draft | list[Draft], cfg: AppConfig, out_dir: Path) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     path = out_dir / "preview.html"
-    path.write_text(build_preview(draft, cfg), encoding="utf-8")
+    path.write_text(build_preview(drafts, cfg), encoding="utf-8")
     return path

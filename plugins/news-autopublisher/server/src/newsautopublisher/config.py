@@ -201,8 +201,18 @@ class VideoConfig(_Model):
     max_seconds: float = 60.0
 
 
+class HintsConfig(_Model):
+    """Suggestions proactives de news (hooks du plugin)."""
+
+    enabled: bool = True
+    min_commits: int = 8  # commits non annoncés avant de suggérer une news
+    cooldown_hours: float = 24  # délai minimal entre deux suggestions pour un même projet
+    remind_pending: bool = True  # rappeler les brouillons en attente au démarrage d'une session
+
+
 class AppConfig(_Model):
     projects: dict[str, ProjectConfig] = Field(default_factory=dict)
+    hints: HintsConfig = Field(default_factory=HintsConfig)
     channels: dict[str, ChannelConfig] = Field(default_factory=dict)
     voice: VoiceConfig = Field(default_factory=VoiceConfig)
     obs: OBSConfig = Field(default_factory=OBSConfig)

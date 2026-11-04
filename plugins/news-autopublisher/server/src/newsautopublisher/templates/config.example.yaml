@@ -145,6 +145,12 @@ obs:
   port: 4455                  # OBS > Outils > Paramètres du serveur WebSocket
   password_env: OBS_WEBSOCKET_PASSWORD
 
+hints:                        # suggestions proactives (« ça mérite une news, je prépare ? »)
+  enabled: true
+  min_commits: 8              # commits non annoncés avant une suggestion (un nouveau tag suffit toujours)
+  cooldown_hours: 24          # au plus une suggestion par jour et par projet
+  remind_pending: true        # rappel des brouillons en attente au démarrage d'une session
+
 video:
   # ffmpeg: C:/ffmpeg/bin/ffmpeg.exe   # seulement si ffmpeg n'est pas dans le PATH
   fps: 30

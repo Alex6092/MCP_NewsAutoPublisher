@@ -37,6 +37,7 @@ from .models import (
     utcnow,
 )
 from .paths import Paths, package_file
+from . import hints, onboarding
 from .preview import write_preview
 from .publishers import discord_bot, x_api, youtube_api
 from .publishers.discord import publish_discord
@@ -95,6 +96,68 @@ class App:
             "next": "Complète config.yaml (projets, chemins des dépôts, canaux) et .env (URL des webhooks). "
             "Les changements sont pris en compte immédiatement.",
         }
+
+    # ------------------------------------------------------------------ assistant d'installation
+    def discover_projects(self, roots: list[str] | None = None, max_depth: int = 3) -> list[dict[str, Any]]:
+        try:
+            configured = {k: (p.repo_path or "") for k, p in self.cfg.projects.items()}
+        except ConfigError:
+            configured = {}
+        return onboarding.discover_projects(roots, configured, max_depth)
+
+    def edit_config(self, section: str, key: str | None = None, value: dict | None = None,
+                    remove: bool = False) -> dict[str, Any]:
+        if not self.paths.config_file.exists():
+            init_data_dir(self.paths)
+        res = onboarding.edit_config(self.paths.config_file, section, key, value, remove)
+        self.config_cache._cfg = None  # rechargement immédiat
+        return res
+
+    def set_secret(self, name: str, value: str) -> dict[str, Any]:
+        if not self.paths.env_file.exists():
+            init_data_dir(self.paths)
+        return onboarding.set_secret(self.paths.env_file, name, value)
+
+    def snooze_hints(self, project: str, days: float = 7) -> dict[str, Any]:
+        self.cfg.project(project)
+        return hints.snooze(self.paths, project, days)
+
+    def open_config_file(self, which: str = "config") -> dict[str, Any]:
+        if not self.paths.config_file.exists():
+            init_data_dir(self.paths)
+        path = self.paths.env_file if which == "env" else self.paths.config_file
+        return {"path": str(path), "opened": desktop.open_path(path)}
+
+    def test_channel(self, channel: str, send_test: bool = False) -> dict[str, Any]:
+        ch = self.cfg.channel(channel)
+        if ch.type == "discord_webhook":
+            import httpx
+
+            url = get_secret(ch.webhook_env)
+            if not url:
+                raise UserError(f"Webhook absent : {ch.webhook_env} n'est pas renseigné dans .env.")
+            try:
+                with httpx.Client(timeout=20) as client:
+                    info = client.get(url)
+                    if info.status_code != 200:
+                        raise UserError(f"Discord refuse ce webhook (HTTP {info.status_code}) : recopie son URL.")
+                    data = info.json()
+                    out: dict[str, Any] = {"ok": True, "webhook": data.get("name"), "channel_id": data.get("channel_id")}
+                    if send_test:
+                        resp = client.post(url, params={"wait": "true"}, json={
+                            "content": "✅ NewsAutoPublisher est bien connecté à ce salon (message de test, tu peux le supprimer).",
+                            "allowed_mentions": {"parse": []}})
+                        msg = resp.json() if resp.status_code < 300 else {}
+                        out["test_message"] = (f"https://discord.com/channels/{data.get('guild_id')}/{msg.get('channel_id')}/"
+                                               f"{msg.get('id')}") if msg else f"échec HTTP {resp.status_code}"
+            except httpx.HTTPError as exc:
+                raise UserError(f"Discord injoignable : {exc.__class__.__name__}") from exc
+            if ch.crosspost:
+                out["bot"] = "jeton présent" if get_secret(ch.bot_token_env) else f"{ch.bot_token_env} manquant"
+            return out
+        if ch.effective_mode in ("intent", "manual"):
+            return {"ok": True, "detail": f"mode {ch.effective_mode} : rien à connecter, tu valides toi-même."}
+        return {"ok": True, **self.connect_account(channel)}
 
     def status(self) -> dict[str, Any]:
         out: dict[str, Any] = {"data_dir": str(self.paths.root), "platform": sys.platform,
@@ -246,6 +309,7 @@ class App:
         youtube: YouTubePost | None = None,
         notes: str = "",
         channels: list[str] | None = None,
+        group: str | None = None,
     ) -> Draft:
         cfg = self.cfg
         p = cfg.project(project)
@@ -254,18 +318,39 @@ class App:
         chans = channels if channels is not None else cfg.channels_for(project, language)
         for c in chans:
             cfg.channel(c)
+        if group:
+            leader = self.store.get_draft(group)
+            if not leader or leader.project != project:
+                raise UserError(f"Groupe inconnu pour {project} : {group} (passe l'id du premier brouillon).")
+            group = leader.group or leader.id
+            if any(m.language == language for m in self._members(group, project)):
+                raise UserError(f"Ce groupe a déjà un brouillon en {language} : utilise update_draft.")
         draft = Draft(
             id=self.store.new_draft_id(project, language),
             project=project,
             language=language,
             topic=topic,
+            group=group,
             channels=chans,
             posts=self._resolve_posts(DraftPosts(discord=discord, x=x, youtube=youtube)),
             head_commit=head_commit(p.repo_path) if p.repo_path else None,
             notes=notes,
         )
+        draft.group = draft.group or draft.id
         self.paths.draft_dir(draft.id).mkdir(parents=True, exist_ok=True)
         return self._refresh(draft)
+
+    def _members(self, group: str, project: str) -> list[Draft]:
+        members = [d for d in self.store.list_drafts(project, None, 300)
+                   if (d.group or d.id) == group and d.status != "discarded"]
+        langs = self.cfg.projects[project].languages if project in self.cfg.projects else []
+        members.sort(key=lambda d: (langs.index(d.language) if d.language in langs else 99, d.created_at))
+        return members
+
+    def _group(self, draft_id: str) -> list[Draft]:
+        """Tous les brouillons de la même nouveauté (une langue chacun), dans l'ordre des langues du projet."""
+        d = self._get(draft_id)
+        return self._members(d.group or d.id, d.project) or [d]
 
     def update_draft(
         self,
@@ -310,8 +395,8 @@ class App:
 
     def list_drafts(self, project: str | None = None, status: str | None = None, limit: int = 20) -> list[dict]:
         return [
-            {"id": d.id, "project": d.project, "language": d.language, "topic": d.topic, "status": d.status,
-             "short": bool(d.short.path), "updated_at": d.updated_at}
+            {"id": d.id, "group": d.group or d.id, "project": d.project, "language": d.language, "topic": d.topic,
+             "status": d.status, "short": bool(d.short.path), "updated_at": d.updated_at}
             for d in self.store.list_drafts(project, status, limit)
         ]
 
@@ -323,10 +408,11 @@ class App:
         return self.store.save_draft(d)
 
     def render_preview(self, draft_id: str, open_browser: bool = True) -> dict[str, Any]:
-        d = self._refresh(self._get(draft_id))
-        path = write_preview(d, self.cfg, self.paths.draft_dir(d.id))
+        members = [self._refresh(m) for m in self._group(draft_id)]
+        path = write_preview(members, self.cfg, self.paths.draft_dir(members[0].group or members[0].id))
         opened = desktop.open_path(path) if open_browser else False
-        return {"preview": str(path), "opened": opened, "issues": [i.model_dump() for i in d.issues]}
+        return {"preview": str(path), "opened": opened, "drafts": [m.id for m in members],
+                "issues": [{"draft": m.id, "language": m.language, **i.model_dump()} for m in members for i in m.issues]}
 
     # ------------------------------------------------------------------ médias & captures
     def _ffmpeg(self) -> tuple[str, str]:
@@ -979,31 +1065,48 @@ class App:
         return result
 
     # ------------------------------------------------------------------ validation & publication
-    def approve_draft(self, draft_id: str) -> Draft:
-        d = self._refresh(self._get(draft_id))
-        if d.status in ("published", "discarded"):
-            raise UserError(f"Brouillon {d.status}.")
-        if has_errors(d.issues):
-            errs = "; ".join(f"{i.platform}.{i.field} : {i.message}" for i in d.issues if i.level == "error")
-            raise UserError(f"Impossible d'approuver, erreurs à corriger : {errs}")
-        if d.status == "draft":
-            d.status = "approved"
-            d.approved_at = utcnow()
-        return self.store.save_draft(d)
+    def approve_draft(self, draft_id: str) -> list[Draft]:
+        """Approuve toute la nouveauté (toutes ses langues) : une seule validation."""
+        members = [self._refresh(m) for m in self._group(draft_id)]
+        pending = [m for m in members if m.status not in ("published", "discarded")]
+        if not pending:
+            raise UserError("Rien à approuver : brouillons déjà publiés ou abandonnés.")
+        errors = [f"[{m.language}] {i.platform}.{i.field} : {i.message}"
+                  for m in pending for i in m.issues if i.level == "error"]
+        if errors:
+            raise UserError("Impossible d'approuver, erreurs à corriger : " + "; ".join(errors))
+        for m in pending:
+            if m.status == "draft":
+                m.status = "approved"
+                m.approved_at = utcnow()
+            self.store.save_draft(m)
+        return members
 
     def publish(self, draft_id: str, channels: list[str] | None = None, dry_run: bool | None = None) -> dict[str, Any]:
-        cfg = self.cfg
-        d = self._refresh(self._get(draft_id))
+        """Publie toute la nouveauté (toutes ses langues)."""
+        members = [self._refresh(m) for m in self._group(draft_id)]
+        members = [m for m in members if m.status != "published"] or members
         dry = _dry_run_default() if dry_run is None else dry_run
-        if d.status not in ("approved", "partial"):
-            raise UserError("Le brouillon doit être approuvé (approve_draft) après accord explicite de l'utilisateur.")
-        if has_errors(d.issues):
-            raise UserError("Le brouillon contient des erreurs : corrige-les puis approuve à nouveau.")
-        targets = channels or d.channels
-        unknown = [c for c in targets if c not in d.channels]
-        if unknown:
-            raise UserError(f"Canaux hors du brouillon : {', '.join(unknown)}")
+        not_ready = [m for m in members if m.status not in ("approved", "partial", "published")]
+        if not_ready:
+            raise UserError("Brouillon(s) non approuvé(s) : " + ", ".join(f"{m.id} ({m.language})" for m in not_ready)
+                            + ". Appelle approve_draft après l'accord explicite de l'utilisateur.")
+        if any(has_errors(m.issues) for m in members):
+            raise UserError("La nouveauté contient des erreurs : corrige-les puis approuve à nouveau.")
+        if channels:
+            known = {c for m in members for c in m.channels}
+            unknown = [c for c in channels if c not in known]
+            if unknown:
+                raise UserError(f"Canaux hors de cette nouveauté : {', '.join(unknown)}")
+        out = []
+        for m in members:
+            targets = [c for c in (channels or m.channels) if c in m.channels]
+            out.append(self._publish_draft(m, targets, dry))
+        return {"group": members[0].group or members[0].id, "dry_run": dry, "drafts": out,
+                "results": [r for d in out for r in d["results"]]}
 
+    def _publish_draft(self, d: Draft, targets: list[str], dry: bool) -> dict[str, Any]:
+        cfg = self.cfg
         p = cfg.project(d.project)
         folder = self.paths.draft_dir(d.id)
         results: list[PublishResult] = []
@@ -1023,20 +1126,18 @@ class App:
             results.append(res)
             if res.status != "dry_run":
                 self.store.record_publication(d, res)
-
         if not dry:
-            statuses = {}
-            for c in d.channels:
-                row = self.store.get_publication(d.id, c)
-                statuses[c] = row["status"] if row else None
-            done = [c for c, s in statuses.items() if s == "published"]
-            if done and len(done) == len(d.channels):
-                d.status = "published"
-            elif any(s in ("published", "pending_manual") for s in statuses.values()):
-                d.status = "partial"
-            self.store.save_draft(d)
-        return {"draft_id": d.id, "status": d.status, "dry_run": dry,
-                "results": [r.model_dump() for r in results]}
+            self._update_status(d)
+        return {"draft_id": d.id, "language": d.language, "status": d.status,
+                "results": [{"language": d.language, **r.model_dump()} for r in results]}
+
+    def _update_status(self, d: Draft) -> None:
+        statuses = [(self.store.get_publication(d.id, c) or {}).get("status") for c in d.channels]
+        if d.channels and all(s == "published" for s in statuses):
+            d.status = "published"
+        elif any(s in ("published", "pending_manual") for s in statuses):
+            d.status = "partial"
+        self.store.save_draft(d)
 
     def _publish_one(self, d: Draft, p: ProjectConfig, ch_id: str, ch, post, folder: Path, dry: bool) -> PublishResult:
         mode = ch.effective_mode
@@ -1170,18 +1271,34 @@ class App:
             return out
         raise UserError(f"Type de canal inconnu : {ch.type}")
 
-    def mark_published(self, draft_id: str, channel: str, url: str) -> dict[str, Any]:
-        d = self._get(draft_id)
-        ch = self.cfg.channel(channel)
-        if channel not in d.channels:
-            raise UserError(f"{channel} ne fait pas partie des canaux du brouillon.")
-        self.store.record_publication(
-            d, PublishResult(channel=channel, platform=ch.platform, status="published", url=url,
-                             message="Confirmé par l'utilisateur."))
-        statuses = [(self.store.get_publication(d.id, c) or {}).get("status") for c in d.channels]
-        d.status = "published" if all(s == "published" for s in statuses) else "partial"
-        self.store.save_draft(d)
-        return {"draft_id": d.id, "status": d.status, "channel": channel, "url": url}
+    def mark_published(self, draft_id: str, channel: str | None = None, url: str | None = None) -> dict[str, Any]:
+        """Confirme une publication faite à la main (X intent, YouTube manuel). URL facultative ;
+        sans canal, tout ce qui est en attente dans la nouveauté est marqué publié (« c'est posté »)."""
+        members = self._group(draft_id)
+        if channel:
+            self.cfg.channel(channel)
+            if not any(channel in m.channels for m in members):
+                raise UserError(f"{channel} ne fait partie d'aucun brouillon de cette nouveauté.")
+        marked = []
+        for m in members:
+            for c in m.channels:
+                row = self.store.get_publication(m.id, c)
+                status = row["status"] if row else None
+                if channel:
+                    if c != channel or (status == "published" and not url):
+                        continue
+                elif status != "pending_manual":
+                    continue
+                ch = self.cfg.channel(c)
+                self.store.record_publication(m, PublishResult(
+                    channel=c, platform=ch.platform, status="published",
+                    url=url or (row["url"] if row and status == "published" else None),
+                    message="Confirmé par l'utilisateur."))
+                marked.append({"draft_id": m.id, "language": m.language, "channel": c, "url": url})
+            self._update_status(m)
+        if not marked:
+            return {"marked": [], "message": "Rien en attente de confirmation dans cette nouveauté."}
+        return {"marked": marked, "statuses": {m.id: m.status for m in members}}
 
 
 def _safe(name: str) -> str:

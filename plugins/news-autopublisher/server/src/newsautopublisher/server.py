@@ -37,7 +37,7 @@ procéduraux autour d'objets), suivies avec engine_capture_status. La règle cap
 de ce qui peut partir sans accord ; user_requested=true seulement après accord explicite de l'utilisateur.
 """
 
-mcp = MCPServer("newsautopublisher", instructions=INSTRUCTIONS, version="0.4.0")
+mcp = MCPServer("newsautopublisher", instructions=INSTRUCTIONS, version="0.5.0")
 _app: App | None = None
 
 READ = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
@@ -83,6 +83,67 @@ async def init_config() -> dict[str, Any]:
     return await _run(lambda: app().init_config())
 
 
+# ---------------------------------------------------------------------------- assistant d'installation
+SETUP = ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=False)
+
+
+@mcp.tool(annotations=READ)
+async def discover_projects(
+    roots: list[str] | None = Field(None, description="Dossiers à explorer ; défaut : ~/Dev, D:/Dev, Documents/GitHub…"),
+    max_depth: int = Field(3, ge=1, le=6),
+) -> list[dict[str, Any]]:
+    """Trouve les dépôts git de l'utilisateur : moteur (Unity / Unreal + version), remote GitHub/GitLab,
+    dernier commit, CHANGELOG, et s'ils sont déjà configurés. Sert à pré-remplir config.yaml."""
+    return await _run(app().discover_projects, roots, max_depth)
+
+
+@mcp.tool(annotations=SETUP)
+async def edit_config(
+    section: Literal["projects", "channels", "voice", "obs", "video", "hints"],
+    key: str | None = Field(None, description="Id du projet ou du canal (obligatoire pour projects / channels)."),
+    value: dict[str, Any] | None = Field(None, description="Réglages à ajouter / fusionner (même structure que config.yaml)."),
+    remove: bool = Field(False, description="Supprimer l'entrée (ex. projets d'exemple inutilisés)."),
+) -> dict[str, Any]:
+    """Modifie config.yaml en conservant les commentaires. Toute modification qui rendrait la configuration
+    invalide est refusée. Jamais de secret ici : utilise set_secret."""
+    return await _run(app().edit_config, section, key, value, remove)
+
+
+@mcp.tool(annotations=SETUP)
+async def set_secret(
+    name: str = Field(..., description="Nom de la variable (ex. DISCORD_WEBHOOK_EXODE)."),
+    value: str = Field(..., description="Valeur (URL de webhook, clé…). Elle n'est jamais renvoyée."),
+) -> dict[str, Any]:
+    """Enregistre un secret dans le .env local (hors dépôts). Préfère open_config_file('env') pour que
+    l'utilisateur colle lui-même ses secrets ; à n'utiliser que s'il les a déjà donnés dans la conversation."""
+    return await _run(app().set_secret, name, value)
+
+
+@mcp.tool(annotations=SETUP)
+async def open_config_file(which: Literal["config", "env"] = "config") -> dict[str, Any]:
+    """Ouvre config.yaml ou .env dans l'éditeur par défaut de l'utilisateur."""
+    return await _run(app().open_config_file, which)
+
+
+@mcp.tool(annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, openWorldHint=True))
+async def test_channel(
+    channel: str,
+    send_test: bool = Field(False, description="Discord : poste un court message de test (avec l'accord de l'utilisateur)."),
+) -> dict[str, Any]:
+    """Vérifie qu'un canal fonctionne : webhook Discord valide (et message de test si demandé), clés X,
+    connexion YouTube. Les modes intent / manuel n'ont rien à tester."""
+    return await _run(app().test_channel, channel, send_test)
+
+
+@mcp.tool(annotations=SETUP)
+async def snooze_news_hints(
+    project: str,
+    days: float = Field(7, ge=0.5, le=90, description="Durée pendant laquelle ne plus suggérer de news."),
+) -> dict[str, Any]:
+    """Met en pause les suggestions proactives de news pour un projet (quand l'utilisateur dit « pas maintenant »)."""
+    return await _run(app().snooze_hints, project, days)
+
+
 # ---------------------------------------------------------------------------- projets & sources
 @mcp.tool(annotations=READ)
 async def list_projects() -> list[dict[str, Any]]:
@@ -126,9 +187,13 @@ async def create_draft(
     youtube: YouTubePost | None = None,
     notes: str = "",
     channels: list[str] | None = Field(None, description="Par défaut : canaux du projet pour cette langue."),
+    group: str | None = Field(
+        None, description="Id du premier brouillon de la même nouveauté (autre langue) : une seule validation pour tout."
+    ),
 ) -> dict[str, Any]:
-    """Crée un brouillon de news (posts par plateforme) et le valide (limites, fuites, fichiers)."""
-    d = await _run(app().create_draft, project, language, topic, discord, x, youtube, notes, channels)
+    """Crée un brouillon de news pour une langue (posts par plateforme) et le valide (limites, fuites, fichiers).
+    Pour un projet bilingue : crée la 1re langue, puis les autres avec group=<id du 1er>."""
+    d = await _run(app().create_draft, project, language, topic, discord, x, youtube, notes, channels, group)
     return _draft_out(d)
 
 
@@ -337,9 +402,9 @@ async def render_short(draft_id: str, storyboard: Storyboard) -> dict[str, Any]:
 # ---------------------------------------------------------------------------- publication
 @mcp.tool(annotations=LOCAL)
 async def approve_draft(draft_id: str) -> dict[str, Any]:
-    """Marque le brouillon comme approuvé. UNIQUEMENT après accord explicite de l'utilisateur."""
-    d = await _run(app().approve_draft, draft_id)
-    return {"id": d.id, "status": d.status, "approved_at": d.approved_at}
+    """Approuve la nouveauté entière (toutes ses langues). UNIQUEMENT après accord explicite de l'utilisateur."""
+    members = await _run(app().approve_draft, draft_id)
+    return {"drafts": [{"id": d.id, "language": d.language, "status": d.status} for d in members]}
 
 
 @mcp.tool(annotations=PUBLISH)
@@ -348,7 +413,7 @@ async def publish(
     channels: list[str] | None = Field(None, description="Sous-ensemble des canaux du brouillon (défaut : tous)."),
     dry_run: bool | None = Field(None, description="Simulation sans rien envoyer (défaut : NAP_DRY_RUN)."),
 ) -> dict[str, Any]:
-    """Publie un brouillon approuvé : Discord (webhook), X (éditeur prérempli), YouTube (upload manuel guidé)."""
+    """Publie la nouveauté approuvée, toutes langues comprises : Discord, X, YouTube selon les modes des canaux."""
     return await _run(app().publish, draft_id, channels, dry_run)
 
 
@@ -362,8 +427,12 @@ async def connect_account(
 
 
 @mcp.tool(annotations=LOCAL)
-async def mark_published(draft_id: str, channel: str, url: str) -> dict[str, Any]:
-    """Enregistre l'URL d'un post publié à la main (X intent, YouTube manuel)."""
+async def mark_published(
+    draft_id: str,
+    channel: str | None = Field(None, description="Canal confirmé ; vide = tout ce qui est en attente (« c'est posté »)."),
+    url: str | None = Field(None, description="URL du post si l'utilisateur la donne (facultatif)."),
+) -> dict[str, Any]:
+    """Confirme les publications faites à la main (X intent, YouTube manuel) pour toute la nouveauté."""
     return await _run(app().mark_published, draft_id, channel, url)
 
 

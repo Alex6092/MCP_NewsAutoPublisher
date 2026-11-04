@@ -29,18 +29,22 @@ Demande : $ARGUMENTS
 
 1. L'utilisateur doit avoir dit clairement oui à **cette** version (« publie », « go », « ok »).
    Une modification après son accord annule cet accord.
-2. `approve_draft(draft_id)`. Si des erreurs bloquent, explique-les et propose une correction.
+2. `approve_draft(draft_id)` : il approuve toute la nouveauté, toutes langues. Si des erreurs
+   bloquent, explique-les et propose une correction.
 3. Optionnel : `publish(draft_id, dry_run=true)` pour une première fois ou un nouveau canal.
-4. `publish(draft_id)`, éventuellement limité à certains `channels` si l'utilisateur le demande.
+4. `publish(draft_id)` : il publie toutes les langues de la nouveauté, éventuellement limité à
+   certains `channels` si l'utilisateur le demande.
 5. Lis chaque résultat :
    - `published` : donne le lien.
      - X en mode API : rappelle le coût estimé.
      - Discord avec crosspost : précise que l'annonce a été diffusée aux serveurs abonnés.
      - YouTube avec `publish_at` : rappelle la date de mise en ligne programmée.
    - `pending_manual` sur X : l'éditeur X s'est ouvert avec le texte. L'utilisateur glisse le
-     short ou l'image affichés dans l'Explorateur, clique « Poster », puis te donne l'URL du post.
+     short ou l'image affichés dans l'Explorateur, puis clique « Poster ».
    - `pending_manual` sur YouTube : YouTube Studio et le dossier du MP4 sont ouverts. Le titre est
-     dans le presse-papiers, le reste est dans `youtube.txt`. L'utilisateur publie, puis te donne l'URL.
+     dans le presse-papiers, le reste est dans `youtube.txt`.
+   - Dans ces deux cas, dis-lui simplement : « Dis-moi “c'est posté” quand c'est fait. » L'URL est
+     facultative ; ne la réclame pas.
    - `failed` : explique la cause et la solution. Cas fréquents :
      - webhook ou clés manquants dans `.env` ;
      - fichier trop lourd ;
@@ -48,7 +52,9 @@ Demande : $ARGUMENTS
        `monthly_budget_usd` lui-même ;
      - compte YouTube non connecté : `connect_account` ;
      - projet Google non audité.
-6. Pour chaque URL reçue : `mark_published(draft_id, channel, url)`.
+6. Quand l'utilisateur confirme :
+   - « c'est posté » : `mark_published(draft_id)`, qui marque tout ce qui était en attente ;
+   - s'il précise un canal ou une URL : `mark_published(draft_id, channel, url)`.
 7. Récapitule en une ou deux lignes ce qui est en ligne et ce qui reste à faire.
 
 Ne republie jamais un canal déjà `published`. L'outil l'empêche aussi.
