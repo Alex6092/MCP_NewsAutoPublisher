@@ -1,0 +1,17 @@
+{
+  "name": "alex6092",
+  "owner": {
+    "name": "Alex6092"
+  },
+  "metadata": {
+    "description": "Outils Claude Code d'Alex6092 : communication automatisée des projets (Discord, X, YouTube Shorts)."
+  },
+  "plugins": [
+    {
+      "name": "news-autopublisher",
+      "source": "./plugins/news-autopublisher",
+      "description": "Rédige les news d'un projet à partir de son historique git, monte un short vertical (captures OBS/écran, voix Piper/ElevenLabs/ta voix, sous-titres) et publie sur Discord, X et YouTube après validation.",
+      "category": "productivity"
+    }
+  ]
+}
