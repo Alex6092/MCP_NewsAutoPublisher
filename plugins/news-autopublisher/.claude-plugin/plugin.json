@@ -1,0 +1,10 @@
+{
+  "name": "news-autopublisher",
+  "version": "0.1.0",
+  "description": "Communication automatisée des projets : brouillons de news depuis git, shorts verticaux (captures, voix off, sous-titres) et publication Discord / X / YouTube après validation humaine.",
+  "author": {
+    "name": "Alex6092"
+  },
+  "repository": "https://github.com/Alex6092/MCP_NewsAutoPublisher",
+  "keywords": ["discord", "twitter", "x", "youtube", "shorts", "devlog", "gamedev", "mcp"]
+}

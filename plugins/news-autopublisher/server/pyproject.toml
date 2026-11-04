@@ -1,0 +1,31 @@
+[project]
+name = "newsautopublisher"
+version = "0.1.0"
+description = "Serveur MCP : news de projets, shorts verticaux et publication Discord / X / YouTube"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp>=2.3,<3",
+    "pydantic>=2.7",
+    "pyyaml>=6",
+    "httpx>=0.27",
+    "python-dotenv>=1",
+    "obsws-python>=1.7",
+    "piper-tts>=1.3",
+]
+
+[project.optional-dependencies]
+# Alignement mot à mot précis des enregistrements de ta voix (sinon : détection des silences).
+align = ["faster-whisper>=1.1"]
+
+[project.scripts]
+newsautopublisher = "newsautopublisher.server:main"
+
+[dependency-groups]
+dev = ["pytest>=8", "respx>=0.21"]
+
+[build-system]
+requires = ["uv_build>=0.8,<0.12"]
+build-backend = "uv_build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "newsautopublisher": {
+      "command": "uv",
+      "args": ["run", "--quiet", "--project", "${CLAUDE_PLUGIN_ROOT}/server", "newsautopublisher"],
+      "env": {
+        "PYTHONUTF8": "1"
+      },
+      "timeout": 900000
+    }
+  }
+}

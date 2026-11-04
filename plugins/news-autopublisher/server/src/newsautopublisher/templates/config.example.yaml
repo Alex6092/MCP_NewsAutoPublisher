@@ -1,0 +1,119 @@
+# Configuration NewsAutoPublisher
+# Emplacement : %USERPROFILE%\.newsautopublisher\config.yaml (ou le dossier défini par NAP_DATA_DIR).
+# Les secrets (URL de webhooks, clés API, mot de passe OBS) vont dans le fichier .env à côté,
+# JAMAIS dans ce fichier ni dans un dépôt git.
+# Les modifications sont prises en compte sans redémarrer Claude Code.
+
+projects:
+  exode:
+    name: Exode
+    repo_path: D:/Dev/Exode            # dépôt local : sert à lire l'historique git et à détecter le projet
+    engine: unity
+    languages: [fr]
+    pitch:
+      fr: "Exode, un MMORPG indépendant en développement."
+    tone: "Devlog authentique et enthousiaste, univers épique, tutoiement de la communauté, pas de jargon interne."
+    audience: "Joueurs de MMORPG et communauté Discord d'Exode"
+    links:
+      discord: https://discord.gg/XXXXXXX
+      # site: https://...
+      # steam: https://store.steampowered.com/app/...
+    hashtags: ["#Exode", "#MMORPG", "#gamedev", "#indiedev"]
+    capture:
+      backend: auto                    # auto | obs | gdigrab | ddagrab
+      window_title: Exode              # sous-chaîne du titre de la fenêtre (jeu ou éditeur Unity)
+      obs_scene: Exode                 # scène OBS à activer avant capture (facultatif)
+    brand:
+      color: "#7C5CFF"
+      accent: "#FFD166"
+      background: "#0E0B1A"
+      # logo: D:/Dev/Exode/Marketing/logo.png
+      # music: D:/Dev/Exode/Marketing/music   # dossier de musiques libres de droits
+    voice:
+      engine: piper                    # piper | elevenlabs | recorded | none
+    channels:
+      fr: [discord.exode, x.main, youtube.main]
+
+  dialogue-quest-master:
+    name: Dialogue & Quest Master
+    repo_path: D:/Dev/UE/DialogueQuestMaster
+    engine: unreal
+    languages: [en, fr]
+    pitch:
+      en: "Dialogue & Quest Master, an Unreal Engine plugin to build branching dialogues and quests visually."
+      fr: "Dialogue & Quest Master, un plugin Unreal Engine pour créer dialogues et quêtes à embranchements."
+    tone: "Professionnel et concret, orienté bénéfices pour les développeurs Unreal, démonstration avant tout."
+    audience: "Développeurs Unreal Engine (indés et studios)"
+    changelog: CHANGELOG.md
+    links:
+      fab: https://www.fab.com/listings/XXXXXXXX
+      # docs: https://...
+    hashtags: ["#UnrealEngine", "#UE5", "#gamedev"]
+    capture:
+      window_title: Unreal Editor
+    channels:
+      en: [discord.plugins_en, x.main, youtube.main]
+      fr: [discord.plugins_fr]
+
+  interaction-master:
+    name: Interaction Master
+    repo_path: D:/Dev/UE/InteractionMaster
+    engine: unreal
+    languages: [en, fr]
+    pitch:
+      en: "Interaction Master, a plug-and-play interaction system for Unreal Engine."
+      fr: "Interaction Master, un système d'interactions clé en main pour Unreal Engine."
+    tone: "Professionnel et concret, orienté bénéfices pour les développeurs Unreal."
+    changelog: CHANGELOG.md
+    links:
+      fab: https://www.fab.com/listings/XXXXXXXX
+    hashtags: ["#UnrealEngine", "#UE5", "#gamedev"]
+    capture:
+      window_title: Unreal Editor
+    channels:
+      en: [discord.plugins_en, x.main, youtube.main]
+      fr: [discord.plugins_fr]
+
+channels:
+  discord.exode:
+    type: discord_webhook
+    label: "Discord Exode #annonces"
+    webhook_env: DISCORD_WEBHOOK_EXODE
+    # mention: "<@&123456789012345678>"   # rôle à notifier ; absent = aucune notification
+    max_upload_mb: 10
+  discord.plugins_en:
+    type: discord_webhook
+    label: "Discord plugins #announcements"
+    webhook_env: DISCORD_WEBHOOK_PLUGINS_EN
+  discord.plugins_fr:
+    type: discord_webhook
+    label: "Discord plugins #annonces"
+    webhook_env: DISCORD_WEBHOOK_PLUGINS_FR
+  x.main:
+    type: x
+    label: "X"
+    mode: intent              # intent = éditeur X prérempli, tu cliques « Poster » (gratuit)
+    # handle: "@ton_compte"
+  youtube.main:
+    type: youtube
+    label: "YouTube Shorts"
+    mode: manual              # manual = MP4 + métadonnées prêts, tu glisses le fichier dans YouTube Studio
+
+voice:
+  default_engine: piper
+  piper:
+    fr: fr_FR-siwis-medium    # autres voix FR : fr_FR-tom-medium, fr_FR-upmc-medium
+    en: en_US-lessac-medium
+  piper_length_scale: 1.0     # 1.1 = un peu plus lent
+  whisper_model: small        # alignement de ta voix enregistrée (si faster-whisper est installé)
+
+obs:
+  enabled: true
+  host: localhost
+  port: 4455                  # OBS > Outils > Paramètres du serveur WebSocket
+  password_env: OBS_WEBSOCKET_PASSWORD
+
+video:
+  # ffmpeg: C:/ffmpeg/bin/ffmpeg.exe   # seulement si ffmpeg n'est pas dans le PATH
+  fps: 30
+  max_seconds: 60
